@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import { app } from 'electron';
 import fs from 'fs';
 import path from 'path';
@@ -924,6 +925,22 @@ function lowercaseHeaderKeys(headers: Record<string, string>): Record<string, st
   return result;
 }
 
+/**
+ * Generates a deterministic ASCII-safe key for MCP server names.
+ * OpenClaw sanitizes non-ASCII characters in server names to hyphens,
+ * which makes Chinese/CJK names unrecognizable. This function transparently
+ * converts unsafe names to a stable `mcp-<hash>` form before passing to OpenClaw.
+ * ASCII-only names (even with spaces/special chars) are left as-is for OpenClaw
+ * to handle natively (e.g., "My Server" → "My-Server" by OpenClaw).
+ */
+const MCP_NAME_NON_ASCII_RE = /[^\x00-\x7F]/;
+
+function safeServerKey(name: string): string {
+  if (!MCP_NAME_NON_ASCII_RE.test(name)) return name;
+  const hash = createHash('md5').update(name).digest('hex').slice(0, 8);
+  return `mcp-${hash}`;
+}
+
 function buildOpenClawMcpServers(
   servers: ResolvedMcpServer[],
 ): Record<string, Record<string, unknown>> {
@@ -948,7 +965,7 @@ function buildOpenClawMcpServers(
         entry.transport = 'streamable-http';
         break;
     }
-    result[server.name] = entry;
+    result[safeServerKey(server.name)] = entry;
   }
   return result;
 }
