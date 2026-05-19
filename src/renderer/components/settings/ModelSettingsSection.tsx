@@ -38,6 +38,7 @@ function sliderToContextWindow(t: number): number {
   const logT = Math.pow(Math.max(0, Math.min(1, t)), 1 / CW_SCALE_EXP);
   return Math.round(Math.exp(CW_LOG_MIN + logT * (CW_LOG_MAX - CW_LOG_MIN)) / 1000) * 1000;
 }
+const CW_SNAP_THRESHOLD = 0.025;
 const CW_MARKER_STOPS = [
   { label: '32K', value: CW_MIN },
   { label: '64K', value: 64000 },
@@ -45,6 +46,31 @@ const CW_MARKER_STOPS = [
   { label: '1M', value: 1000000 },
   { label: '2M', value: CW_MAX },
 ].map(m => ({ ...m, pos: contextWindowToSlider(m.value) }));
+
+function snapSliderValue(t: number): number {
+  for (const m of CW_MARKER_STOPS) {
+    if (Math.abs(t - m.pos) < CW_SNAP_THRESHOLD) return m.pos;
+  }
+  return t;
+}
+
+function parseContextWindowInput(input: string): number | null {
+  const s = input.trim().toLowerCase().replace(/,/g, '');
+  const match = s.match(/^(\d+(?:\.\d+)?)\s*(k|m)?$/);
+  if (!match) return null;
+  let num = parseFloat(match[1]);
+  if (match[2] === 'k') num *= 1000;
+  else if (match[2] === 'm') num *= 1_000_000;
+  const result = Math.round(num);
+  if (result < CW_MIN || result > CW_MAX) return null;
+  return result;
+}
+
+function formatContextWindow(value: number): string {
+  if (value >= 1_000_000 && value % 1_000_000 === 0) return `${value / 1_000_000}M`;
+  if (value >= 1000 && value % 1000 === 0) return `${value / 1000}K`;
+  return value.toLocaleString();
+}
 
 type MiniMaxOAuthPhase =
   | { kind: 'idle' }
@@ -166,6 +192,8 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
   handleAddModel, handleEditModel, handleDeleteModel,
   handleSaveNewModel, handleCancelModelEdit, handleModelDialogKeyDown,
 }) => {
+  const [newModelContextWindowText, setNewModelContextWindowText] = React.useState<string | null>(null);
+
   return (
     <>
           <div className="flex h-full">
@@ -1613,13 +1641,21 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                     </label>
                     <div className="flex-1 min-w-0">
                       <input
-                        type="number"
-                        min={CW_MIN}
-                        max={CW_MAX}
-                        value={newModelContextWindow ?? CW_DEFAULT}
-                        onChange={(e) => {
-                          const v = parseInt(e.target.value, 10);
-                          if (!isNaN(v)) setNewModelContextWindow(Math.max(CW_MIN, Math.min(CW_MAX, v)));
+                        type="text"
+                        value={newModelContextWindowText ?? formatContextWindow(newModelContextWindow ?? CW_DEFAULT)}
+                        onFocus={(e) => setNewModelContextWindowText(e.target.value)}
+                        onChange={(e) => setNewModelContextWindowText(e.target.value)}
+                        onBlur={() => {
+                          if (newModelContextWindowText != null) {
+                            const parsed = parseContextWindowInput(newModelContextWindowText);
+                            if (parsed != null) setNewModelContextWindow(parsed);
+                            setNewModelContextWindowText(null);
+                          }
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            (e.target as HTMLInputElement).blur();
+                          }
                         }}
                         className="w-24 rounded-lg bg-surface-inset border-border border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-2.5 py-1 text-xs text-center tabular-nums mb-2"
                       />
@@ -1627,13 +1663,16 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                       <div className="relative h-3">
                         {/* Track line */}
                         <div className="absolute top-1/2 left-0 right-0 h-[3px] -translate-y-1/2 rounded-full bg-border" />
-                        {/* Marker dots */}
+                        {/* Marker dots (clickable) */}
                         {CW_MARKER_STOPS.map((m) => (
                           <div
                             key={m.label}
-                            className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-[7px] h-[7px] rounded-full bg-white border-[1.5px] border-border z-[1]"
+                            className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-4 h-4 rounded-full cursor-pointer z-[3] flex items-center justify-center"
                             style={{ left: `${m.pos * 100}%` }}
-                          />
+                            onClick={() => setNewModelContextWindow(m.value)}
+                          >
+                            <div className="w-[7px] h-[7px] rounded-full bg-white border-[1.5px] border-border" />
+                          </div>
                         ))}
                         {/* Range input overlay */}
                         <input
@@ -1642,7 +1681,7 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                           max={1}
                           step={0.001}
                           value={contextWindowToSlider(newModelContextWindow ?? CW_DEFAULT)}
-                          onChange={(e) => setNewModelContextWindow(sliderToContextWindow(Number(e.target.value)))}
+                          onChange={(e) => setNewModelContextWindow(sliderToContextWindow(snapSliderValue(Number(e.target.value))))}
                           className="absolute inset-0 w-full h-full appearance-none cursor-pointer bg-transparent z-[2] [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3.5 [&::-webkit-slider-thumb]:h-3.5 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-primary [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:shadow-[0_1px_3px_rgba(0,0,0,0.2)] [&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-white [&::-webkit-slider-runnable-track]:bg-transparent"
                         />
                       </div>
