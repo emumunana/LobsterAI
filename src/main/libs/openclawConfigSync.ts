@@ -1235,6 +1235,7 @@ export class OpenClawConfigSync {
                 providerName: ProviderName.LobsteraiServer,
                 supportsImage: sm.supportsImage,
                 modelName: sm.modelId,
+                contextWindow: sm.contextWindow,
               });
               upsertProviderModel(lobsteraiProviderConfig, serverSel.providerConfig.models[0]);
             }

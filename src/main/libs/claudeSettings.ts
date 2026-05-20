@@ -81,26 +81,28 @@ export function setServerBaseUrlGetter(getter: () => string): void {
 }
 
 // Cached server model metadata (populated when auth:getModels is called)
-// Keyed by modelId → { supportsImage }
-let serverModelMetadataCache: Map<string, { supportsImage?: boolean }> = new Map();
+// Keyed by modelId → { supportsImage, contextWindow }
+let serverModelMetadataCache: Map<string, { supportsImage?: boolean; contextWindow?: number }> = new Map();
 
 const serializeServerModelMetadata = (
-  models: Array<{ modelId: string; supportsImage?: boolean }>,
+  models: Array<{ modelId: string; supportsImage?: boolean; contextWindow?: number }>,
 ): string => JSON.stringify(
   models
     .map((model) => ({
       modelId: model.modelId,
       supportsImage: model.supportsImage,
+      contextWindow: model.contextWindow,
     }))
     .sort((a, b) => a.modelId.localeCompare(b.modelId)),
 );
 
-export function updateServerModelMetadata(models: Array<{ modelId: string; supportsImage?: boolean }>): boolean {
+export function updateServerModelMetadata(models: Array<{ modelId: string; supportsImage?: boolean; contextWindow?: number }>): boolean {
   const previous = serializeServerModelMetadata(getAllServerModelMetadata());
-  const nextCache = new Map(models.map(m => [m.modelId, { supportsImage: m.supportsImage }]));
+  const nextCache = new Map(models.map(m => [m.modelId, { supportsImage: m.supportsImage, contextWindow: m.contextWindow }]));
   const next = serializeServerModelMetadata(Array.from(nextCache.entries()).map(([modelId, meta]) => ({
     modelId,
     supportsImage: meta.supportsImage,
+    contextWindow: meta.contextWindow,
   })));
   serverModelMetadataCache = nextCache;
   return previous !== next;
@@ -110,10 +112,11 @@ export function clearServerModelMetadata(): void {
   serverModelMetadataCache.clear();
 }
 
-export function getAllServerModelMetadata(): Array<{ modelId: string; supportsImage?: boolean }> {
+export function getAllServerModelMetadata(): Array<{ modelId: string; supportsImage?: boolean; contextWindow?: number }> {
   return Array.from(serverModelMetadataCache.entries()).map(([modelId, meta]) => ({
     modelId,
     supportsImage: meta.supportsImage,
+    contextWindow: meta.contextWindow,
   }));
 }
 
