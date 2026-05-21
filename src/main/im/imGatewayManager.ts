@@ -1702,14 +1702,9 @@ export class IMGatewayManager extends EventEmitter {
             },
           }, { syncGateway: false });
         }
-        // Sync config and restart gateway so the weixin channel starts with
-        // the newly saved account credentials. The gateway's web.login.wait
-        // handler called context.startChannel, but the channel may not fully
-        // initialize without a proper config-driven restart.
-        await this.syncOpenClawConfig?.('im-weixin-qr-login-connected', {
-          restartGatewayIfRunning: true,
-        });
-        await this.ensureOpenClawGatewayConnected?.();
+        // Keep QR login consistent with Settings save semantics: persist the
+        // account locally, then let the global Save action apply IM config to
+        // OpenClaw and restart the gateway once if the fingerprint changed.
       }
       return {
         ...result,

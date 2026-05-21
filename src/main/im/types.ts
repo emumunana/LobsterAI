@@ -683,6 +683,7 @@ export interface IMStatusResult {
 
 export interface IMGatewayResult {
   success: boolean;
+  skipped?: boolean;
   error?: string;
 }
 

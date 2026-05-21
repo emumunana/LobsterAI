@@ -705,9 +705,9 @@ interface IElectronAPI {
     getConfig: () => Promise<{ success: boolean; config?: IMGatewayConfig; error?: string }>;
     setConfig: (
       config: Partial<IMGatewayConfig>,
-      options?: { syncGateway?: boolean; restartGatewayIfRunning?: boolean },
+      options?: { syncGateway?: boolean; restartGatewayIfRunning?: boolean; markRestartOnSave?: boolean },
     ) => Promise<{ success: boolean; error?: string }>;
-    syncConfig: () => Promise<{ success: boolean; error?: string }>;
+    syncConfig: () => Promise<{ success: boolean; skipped?: boolean; error?: string }>;
     startGateway: (platform: Platform) => Promise<{ success: boolean; error?: string }>;
     stopGateway: (platform: Platform) => Promise<{ success: boolean; error?: string }>;
     testGateway: (
@@ -759,7 +759,7 @@ interface IElectronAPI {
     // POPO Multi-Instance
     addPopoInstance: (name: string) => Promise<{ success: boolean; instance?: import('./im').PopoInstanceConfig; error?: string }>;
     deletePopoInstance: (instanceId: string) => Promise<{ success: boolean; error?: string }>;
-    setPopoInstanceConfig: (instanceId: string, config: Record<string, unknown>, options?: { syncGateway?: boolean }) => Promise<{ success: boolean; error?: string }>;
+    setPopoInstanceConfig: (instanceId: string, config: Record<string, unknown>, options?: { syncGateway?: boolean; restartGatewayIfRunning?: boolean; markRestartOnSave?: boolean }) => Promise<{ success: boolean; error?: string }>;
 
     listPairingRequests: (platform: string) => Promise<{
       success: boolean;
@@ -806,7 +806,7 @@ interface IElectronAPI {
     setNimInstanceConfig: (
       instanceId: string,
       config: any,
-      options?: { syncGateway?: boolean },
+      options?: { syncGateway?: boolean; restartGatewayIfRunning?: boolean; markRestartOnSave?: boolean },
     ) => Promise<{ success: boolean; error?: string }>;
     addQQInstance: (
       name: string,
@@ -815,7 +815,7 @@ interface IElectronAPI {
     setQQInstanceConfig: (
       instanceId: string,
       config: any,
-      options?: { syncGateway?: boolean },
+      options?: { syncGateway?: boolean; restartGatewayIfRunning?: boolean; markRestartOnSave?: boolean },
     ) => Promise<{ success: boolean; error?: string }>;
     addFeishuInstance: (
       name: string,
@@ -824,7 +824,7 @@ interface IElectronAPI {
     setFeishuInstanceConfig: (
       instanceId: string,
       config: any,
-      options?: { syncGateway?: boolean },
+      options?: { syncGateway?: boolean; restartGatewayIfRunning?: boolean; markRestartOnSave?: boolean },
     ) => Promise<{ success: boolean; error?: string }>;
     addDingTalkInstance: (
       name: string,
@@ -833,7 +833,7 @@ interface IElectronAPI {
     setDingTalkInstanceConfig: (
       instanceId: string,
       config: any,
-      options?: { syncGateway?: boolean },
+      options?: { syncGateway?: boolean; restartGatewayIfRunning?: boolean; markRestartOnSave?: boolean },
     ) => Promise<{ success: boolean; error?: string }>;
     addEmailInstance: (
       name: string,
@@ -842,7 +842,7 @@ interface IElectronAPI {
     setEmailInstanceConfig: (
       instanceId: string,
       config: any,
-      options?: { syncGateway?: boolean },
+      options?: { syncGateway?: boolean; restartGatewayIfRunning?: boolean; markRestartOnSave?: boolean },
     ) => Promise<{ success: boolean; error?: string }>;
     addWecomInstance: (
       name: string,
@@ -851,7 +851,7 @@ interface IElectronAPI {
     setWecomInstanceConfig: (
       instanceId: string,
       config: any,
-      options?: { syncGateway?: boolean },
+      options?: { syncGateway?: boolean; restartGatewayIfRunning?: boolean; markRestartOnSave?: boolean },
     ) => Promise<{ success: boolean; error?: string }>;
     addTelegramInstance: (
       name: string,
@@ -860,7 +860,7 @@ interface IElectronAPI {
     setTelegramInstanceConfig: (
       instanceId: string,
       config: any,
-      options?: { syncGateway?: boolean },
+      options?: { syncGateway?: boolean; restartGatewayIfRunning?: boolean; markRestartOnSave?: boolean },
     ) => Promise<{ success: boolean; error?: string }>;
     addDiscordInstance: (
       name: string,
@@ -869,7 +869,7 @@ interface IElectronAPI {
     setDiscordInstanceConfig: (
       instanceId: string,
       config: any,
-      options?: { syncGateway?: boolean },
+      options?: { syncGateway?: boolean; restartGatewayIfRunning?: boolean; markRestartOnSave?: boolean },
     ) => Promise<{ success: boolean; error?: string }>;
     onStatusChange: (callback: (status: IMGatewayStatus) => void) => () => void;
     onMessageReceived: (callback: (message: IMMessage) => void) => () => void;

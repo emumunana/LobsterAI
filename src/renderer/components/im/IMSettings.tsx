@@ -73,6 +73,10 @@ const verdictColorClass: Record<IMConnectivityTestResult['verdict'], string> = {
   fail: 'bg-red-500/15 text-red-600 dark:text-red-400',
 };
 
+const IM_AUTH_RESTART_ON_SAVE_OPTIONS = {
+  markRestartOnSave: true,
+} as const;
+
 const checkLevelColorClass: Record<IMConnectivityCheck['level'], string> = {
   pass: 'text-green-600 dark:text-green-400',
   info: 'text-sky-600 dark:text-sky-400',
@@ -230,7 +234,7 @@ const IMSettings: React.FC = () => {
                 appId: pollResult.appId,
                 appSecret: pollResult.appSecret,
                 enabled: true,
-              });
+              }, IM_AUTH_RESTART_ON_SAVE_OPTIONS);
               setActiveFeishuInstanceId(inst.instanceId);
               setFeishuExpanded(true);
             }
@@ -500,7 +504,7 @@ const IMSettings: React.FC = () => {
 
     // For Weixin, save weixin config directly (OpenClaw mode)
     if (activePlatform === 'weixin') {
-      await imService.updateConfig({ weixin: weixinOpenClawConfig });
+      await imService.persistConfig({ weixin: weixinOpenClawConfig });
       return;
     }
 
@@ -566,20 +570,20 @@ const IMSettings: React.FC = () => {
     return result;
   };
 
-  // Toggle gateway on/off and persist enabled state
+  // Toggle IM enabled state as pending settings config. Gateway runtime is
+  // applied by the global Save action.
   const toggleGateway = async (platform: Platform) => {
     // Re-entrancy guard: if a toggle is already in progress for this platform, bail out.
-    // This prevents rapid ON→OFF→ON clicks from causing concurrent native SDK init/uninit.
+    // This prevents rapid ON→OFF→ON clicks from racing local config writes.
     if (togglingPlatform === platform) return;
     setTogglingPlatform(platform);
 
     try {
-      // All OpenClaw platforms: im:config:set handler already calls
-      // syncOpenClawConfig({ restartGatewayIfRunning: true }), so no startGateway/stopGateway needed.
-      // Only updateConfig + loadStatus is required.
+      // Settings toggles are saved as pending config changes. The global Save
+      // button later asks main to diff IM config and restart the gateway once
+      // when the change affects channel runtime.
       // Pessimistic UI update: wait for IPC to complete before updating Redux state.
-      // This prevents UI/backend state divergence when rapidly toggling, since the
-      // backend debounces syncOpenClawConfig calls with a 600ms window.
+      // This prevents UI/backend state divergence when rapidly toggling.
       if (platform === 'telegram') {
         // Telegram multi-instance: toggle is handled per-instance in TelegramInstanceSettings
         return;
@@ -627,26 +631,12 @@ const IMSettings: React.FC = () => {
       // Map platform to its Redux action
       const setConfigAction = getSetConfigAction(platform);
 
-      // Update Redux state
-      dispatch(setConfigAction({ enabled: newEnabled }));
-
       // Persist the updated config (construct manually since Redux state hasn't re-rendered yet)
-      await imService.updateConfig({ [platform]: { ...config[platform], enabled: newEnabled } });
-
-      if (newEnabled) {
-        dispatch(clearError());
-        const success = await imService.startGateway(platform);
-        if (!success) {
-          // Rollback enabled state on failure
-          dispatch(setConfigAction({ enabled: false }));
-          await imService.updateConfig({ [platform]: { ...config[platform], enabled: false } });
-        } else {
-          await runConnectivityTest(platform, {
-            [platform]: { ...config[platform], enabled: true },
-          } as Partial<IMGatewayConfig>);
-        }
-      } else {
-        await imService.stopGateway(platform);
+      const success = await imService.updateConfig({ [platform]: { ...config[platform], enabled: newEnabled } });
+      if (success) {
+        dispatch(setConfigAction({ enabled: newEnabled }));
+        if (newEnabled) dispatch(clearError());
+        await imService.loadStatus();
       }
     } finally {
       setTogglingPlatform(null);
@@ -1697,8 +1687,11 @@ const IMSettings: React.FC = () => {
               }}
               onSave={async (override) => {
                 const configToSave = override ? { ...selectedInstance, ...override } : selectedInstance;
-                if (selectedInstance.enabled) {
-                  await imService.updateDingTalkInstanceConfig(activeDingTalkInstanceId, configToSave);
+                const restartOnSaveOptions = override?.enabled === true && !!override.clientId && !!override.clientSecret
+                  ? IM_AUTH_RESTART_ON_SAVE_OPTIONS
+                  : undefined;
+                if (selectedInstance.enabled || restartOnSaveOptions) {
+                  await imService.updateDingTalkInstanceConfig(activeDingTalkInstanceId, configToSave, restartOnSaveOptions);
                 } else {
                   await imService.persistDingTalkInstanceConfig(activeDingTalkInstanceId, configToSave);
                 }
@@ -1768,8 +1761,11 @@ const IMSettings: React.FC = () => {
               }}
               onSave={async (override) => {
                 const configToSave = override ? { ...selectedInstance, ...override } : selectedInstance;
-                if (selectedInstance.enabled) {
-                  await imService.updateFeishuInstanceConfig(activeFeishuInstanceId, configToSave);
+                const restartOnSaveOptions = override?.enabled === true && !!override.appId && !!override.appSecret
+                  ? IM_AUTH_RESTART_ON_SAVE_OPTIONS
+                  : undefined;
+                if (selectedInstance.enabled || restartOnSaveOptions) {
+                  await imService.updateFeishuInstanceConfig(activeFeishuInstanceId, configToSave, restartOnSaveOptions);
                 } else {
                   await imService.persistFeishuInstanceConfig(activeFeishuInstanceId, configToSave);
                 }
@@ -2394,8 +2390,12 @@ const IMSettings: React.FC = () => {
               }}
               onSave={async (override) => {
                 const configToSave = override ? { ...selectedInstance, ...override } : selectedInstance;
-                if (selectedInstance.enabled) {
-                  await imService.updateNimInstanceConfig(activeNimInstanceId, configToSave);
+                const restartOnSaveOptions = override?.enabled === true
+                  && (!!override.nimToken || !!(override.appKey && override.account && override.token))
+                  ? IM_AUTH_RESTART_ON_SAVE_OPTIONS
+                  : undefined;
+                if (selectedInstance.enabled || restartOnSaveOptions) {
+                  await imService.updateNimInstanceConfig(activeNimInstanceId, configToSave, restartOnSaveOptions);
                 } else {
                   await imService.persistNimInstanceConfig(activeNimInstanceId, configToSave);
                 }
@@ -2739,7 +2739,11 @@ const IMSettings: React.FC = () => {
                     if (!isMountedRef.current) return;
                     dispatch(setWecomInstanceConfig({ instanceId: activeWecomInstanceId!, config: { botId: bot.botid, secret: bot.secret, enabled: true } }));
                     dispatch(clearError());
-                    await imService.updateWecomInstanceConfig(activeWecomInstanceId!, { botId: bot.botid, secret: bot.secret, enabled: true });
+                    await imService.updateWecomInstanceConfig(
+                      activeWecomInstanceId!,
+                      { botId: bot.botid, secret: bot.secret, enabled: true },
+                      IM_AUTH_RESTART_ON_SAVE_OPTIONS,
+                    );
                     if (!isMountedRef.current) return;
                     await imService.loadStatus();
                     if (!isMountedRef.current) return;
@@ -2827,8 +2831,14 @@ const IMSettings: React.FC = () => {
               }}
               onSave={async (override) => {
                 const configToSave = override ? { ...selectedInstance, ...override } : selectedInstance;
-                if (selectedInstance.enabled) {
-                  await imService.updatePopoInstanceConfig(activePopoInstanceId, configToSave);
+                const restartOnSaveOptions = override?.enabled === true
+                  && !!override.appKey
+                  && !!override.appSecret
+                  && !!override.aesKey
+                  ? IM_AUTH_RESTART_ON_SAVE_OPTIONS
+                  : undefined;
+                if (selectedInstance.enabled || restartOnSaveOptions) {
+                  await imService.updatePopoInstanceConfig(activePopoInstanceId, configToSave, restartOnSaveOptions);
                 } else {
                   await imService.persistPopoInstanceConfig(activePopoInstanceId, configToSave);
                 }
