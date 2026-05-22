@@ -1,5 +1,5 @@
 import { ArrowLeftIcon } from '@heroicons/react/20/solid';
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { i18nService } from '../../services/i18n';
 import type { CoworkMessage, SubagentSessionSummary } from '../../types/cowork';
@@ -64,24 +64,31 @@ const SubagentSessionDetail: React.FC<SubagentSessionDetailProps> = ({ subagent,
     void fetchHistory();
     void fetchStatus();
 
-    const timer = setInterval(() => {
-      void fetchHistory();
-      void fetchStatus();
-    }, 5000);
-
-    return () => clearInterval(timer);
-  }, [fetchHistory, fetchStatus]);
-
-  // Stop polling when done
-  useEffect(() => {
-    if (status === 'done') {
-      void fetchHistory();
+    // Only poll while subagent is still running
+    if (status === 'running') {
+      const timer = setInterval(() => {
+        void fetchHistory();
+        void fetchStatus();
+      }, 5000);
+      return () => clearInterval(timer);
     }
-  }, [status, fetchHistory]);
+  }, [fetchHistory, fetchStatus, status]);
 
-  const displayTitle = subagent.task
-    ? subagent.task.length > 60 ? subagent.task.slice(0, 60) + '...' : subagent.task
-    : subagent.agentId ?? 'Subagent';
+  // Use agent name as title to avoid duplicating the task content shown in conversation
+  const displayTitle = subagent.agentId ?? subagent.label ?? 'Subagent';
+
+  // When messages are empty but task exists, synthesize a user message so
+  // the view shows the initial prompt instead of "暂无对话记录"
+  const effectiveMessages = useMemo(() => {
+    if (messages.length > 0) return messages;
+    if (!subagent.task) return messages;
+    return [{
+      id: 'synthetic-task',
+      type: 'user' as const,
+      content: subagent.task,
+      timestamp: subagent.createdAt,
+    }] as CoworkMessage[];
+  }, [messages, subagent.task, subagent.createdAt]);
 
   return (
     <div className="flex h-full flex-col">
@@ -154,17 +161,9 @@ const SubagentSessionDetail: React.FC<SubagentSessionDetailProps> = ({ subagent,
           </div>
         )}
 
-        {!loading && messages.length === 0 && (
-          <div className="flex flex-col items-center justify-center py-12">
-            <p className="text-sm text-secondary">
-              {i18nService.t('subTaskNoHistory') || 'No messages yet'}
-            </p>
-          </div>
-        )}
-
-        {!loading && messages.length > 0 && (
+        {!loading && (
           <ConversationTurnsView
-            messages={messages}
+            messages={effectiveMessages}
             isStreaming={status === 'running'}
             readOnly={true}
           />

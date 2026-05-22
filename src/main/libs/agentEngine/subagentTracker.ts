@@ -10,6 +10,33 @@ const isRecord = (value: unknown): value is Record<string, unknown> => {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 };
 
+/**
+ * Resolve tool input from a tool_use block, handling multiple field names and formats.
+ * The gateway can return tool arguments as:
+ *  - `input` (Anthropic format, object)
+ *  - `args` (OpenClaw format, object)
+ *  - `arguments` (OpenAI format, may be a JSON string)
+ */
+const resolveToolInput = (block: Record<string, unknown>): Record<string, unknown> => {
+  if (isRecord(block.input)) return block.input;
+  if (isRecord(block.args)) return block.args;
+  if (isRecord(block.arguments)) return block.arguments;
+  // arguments may be a JSON string (OpenAI format)
+  if (typeof block.arguments === 'string') {
+    try {
+      const parsed = JSON.parse(block.arguments);
+      if (isRecord(parsed)) return parsed;
+    } catch { /* ignore parse errors */ }
+  }
+  if (typeof block.input === 'string') {
+    try {
+      const parsed = JSON.parse(block.input);
+      if (isRecord(parsed)) return parsed;
+    } catch { /* ignore parse errors */ }
+  }
+  return {};
+};
+
 /** Message format compatible with renderer CoworkMessage interface */
 export interface SubagentCoworkMessage {
   id: string;
@@ -49,9 +76,17 @@ export class SubagentTracker {
   /** Maps toolCallId → agentId for correlating spawn start → result */
   private readonly subagentToolCallIdToAgentId = new Map<string, string>();
   /** Maps toolCallId → lifecycle status */
-  private readonly subagentStatus = new Map<string, 'running' | 'done'>();
+  private readonly subagentStatus = new Map<string, 'running' | 'done' | 'error'>();
   /** Reverse map: agentId → Set of toolCallIds (for lookups from sessions_resume args) */
   private readonly agentIdToToolCallIds = new Map<string, Set<string>>();
+  /** Pending spawn info stored at tool start, used for DB insertion when result arrives */
+  private readonly pendingSpawnInfo = new Map<string, {
+    agentId: string;
+    task: string | null;
+    label: string | null;
+    parentSessionId: string;
+    createdAt: number;
+  }>();
 
   constructor(
     private readonly store: SubagentRunStore,
@@ -62,9 +97,8 @@ export class SubagentTracker {
 
   /**
    * Called when a sessions_spawn tool call starts.
-   * Tracks the subagent and persists the initial run record.
-   * Uses toolCallId as the unique run identifier to avoid collisions
-   * when multiple subagents share the same agentId.
+   * Stores spawn info in memory only — DB insertion is deferred until the result arrives
+   * so we can determine the correct initial status (running vs error).
    */
   onToolStart(
     toolCallId: string,
@@ -81,7 +115,6 @@ export class SubagentTracker {
     const task = typeof args?.task === 'string' ? args.task : '';
     const label = typeof args?.label === 'string' ? args.label : undefined;
     if (agentId) {
-      this.subagentStatus.set(toolCallId, 'running');
       if (!this.subagentMessages.has(toolCallId)) {
         this.subagentMessages.set(toolCallId, []);
       }
@@ -93,33 +126,40 @@ export class SubagentTracker {
         this.agentIdToToolCallIds.set(agentId, toolCallIds);
       }
       toolCallIds.add(toolCallId);
-      this.store.insertSubagentRun({
-        id: toolCallId,
-        parentSessionId: sessionId,
-        sessionKey: null,
+      // Store info for deferred DB insertion
+      this.pendingSpawnInfo.set(toolCallId, {
         agentId,
         task: task || null,
         label: label ?? null,
-        status: 'running',
+        parentSessionId: sessionId,
         createdAt: Date.now(),
       });
     }
   }
 
   /**
-   * Called when a sessions_spawn tool result arrives.
-   * Extracts childSessionKey and persists it.
+   * Called when a sessions_spawn tool result arrives (non-empty).
+   * Creates the DB record with the correct status based on the result.
    */
   onSpawnResult(toolCallId: string, resultText: string, _args: Record<string, unknown>): void {
     if (!resultText) return;
+    if (!this.subagentToolCallIdToAgentId.has(toolCallId)) return;
     try {
       const parsed = JSON.parse(resultText);
-      const childSessionKey = typeof parsed?.childSessionKey === 'string' ? parsed.childSessionKey : '';
-      if (toolCallId && childSessionKey && this.subagentToolCallIdToAgentId.has(toolCallId)) {
-        this.subagentSessionKeys.set(toolCallId, childSessionKey);
-        this.store.updateSubagentRunSessionKey(toolCallId, childSessionKey);
-      }
+      this.commitSpawnResult(toolCallId, parsed);
     } catch { /* result may not be JSON */ }
+  }
+
+  /**
+   * Called when backfill retrieves a sessions_spawn tool result text.
+   * Creates the DB record if not already done.
+   */
+  onBackfillResult(toolCallId: string, text: string): void {
+    if (!this.subagentToolCallIdToAgentId.has(toolCallId)) return;
+    try {
+      const parsed = JSON.parse(text);
+      this.commitSpawnResult(toolCallId, parsed);
+    } catch { /* not JSON */ }
   }
 
   /**
@@ -137,24 +177,6 @@ export class SubagentTracker {
         this.store.updateSubagentRunStatus(tcId, 'done', Date.now());
       }
     }
-  }
-
-  /**
-   * Called when backfill retrieves a sessions_spawn tool result text.
-   * Extracts childSessionKey if not already known.
-   */
-  onBackfillResult(toolCallId: string, text: string): void {
-    if (!this.subagentToolCallIdToAgentId.has(toolCallId)) return;
-    if (this.subagentSessionKeys.has(toolCallId)) return;
-    try {
-      const parsed = JSON.parse(text);
-      const childSessionKey = typeof parsed?.childSessionKey === 'string' ? parsed.childSessionKey : '';
-      if (childSessionKey) {
-        this.subagentSessionKeys.set(toolCallId, childSessionKey);
-        this.store.updateSubagentRunSessionKey(toolCallId, childSessionKey);
-        console.log('[SubagentTracker] session key from backfill:', toolCallId, childSessionKey);
-      }
-    } catch { /* not JSON */ }
   }
 
   /**
@@ -189,6 +211,7 @@ export class SubagentTracker {
     this.subagentStatus.clear();
     this.subagentToolCallIdToAgentId.clear();
     this.agentIdToToolCallIds.clear();
+    this.pendingSpawnInfo.clear();
   }
 
   // ── Public query API ───────────────────────────────────────────────────
@@ -196,6 +219,8 @@ export class SubagentTracker {
   /**
    * Returns persisted subagent runs for a parent session.
    * Merges in-memory status with database records for real-time accuracy.
+   * Records stuck in 'running' from a previous app session (no in-memory state)
+   * are automatically marked as 'error'.
    */
   listSubagentRuns(parentSessionId: string): Array<{
     id: string;
@@ -210,6 +235,22 @@ export class SubagentTracker {
     return runs.map((run) => {
       const memoryStatus = this.subagentStatus.get(run.id);
       const memorySessionKey = this.subagentSessionKeys.get(run.id);
+
+      // Stale 'running' record from a previous session: no in-memory tracking means
+      // it was never committed in this app lifecycle → mark as error and persist.
+      if (run.status === 'running' && !memoryStatus && !this.pendingSpawnInfo.has(run.id)) {
+        this.store.updateSubagentRunStatus(run.id, 'error', Date.now());
+        return {
+          id: run.id,
+          agentId: run.agentId,
+          task: run.task,
+          label: run.label,
+          sessionKey: memorySessionKey ?? run.sessionKey,
+          status: 'error' as const,
+          createdAt: run.createdAt,
+        };
+      }
+
       return {
         id: run.id,
         agentId: run.agentId,
@@ -232,15 +273,20 @@ export class SubagentTracker {
     runId: string,
     sessionKey?: string,
   ): Promise<SubagentCoworkMessage[]> {
-    // 1. Try locally collected messages (only serve cache if subagent is done)
+    // 1. Try locally collected messages (only serve cache if subagent is done/error)
     const status = this.subagentStatus.get(runId);
     const local = this.subagentMessages.get(runId);
-    if (local && local.length > 0 && status === 'done') {
+    if (local && local.length > 0 && (status === 'done' || status === 'error')) {
       return local;
     }
 
     // 2. Resolve session key from multiple sources
     let key = sessionKey || this.subagentSessionKeys.get(runId);
+
+    // Cache externally-provided session key in memory for later lookups
+    if (sessionKey && !this.subagentSessionKeys.has(runId)) {
+      this.subagentSessionKeys.set(runId, sessionKey);
+    }
 
     // 2b. Try reading from persistent store if not in memory
     if (!key) {
@@ -267,7 +313,7 @@ export class SubagentTracker {
       const discovered = await this.discoverSubagentSessionKey(runId);
       if (!discovered) return [];
       this.subagentSessionKeys.set(runId, discovered);
-      return this.fetchSubagentHistory(discovered, runId);
+      key = discovered;
     }
 
     console.log('[SubagentTracker] getSubTaskHistory: fetching history for runId:', runId, 'key:', key);
@@ -275,6 +321,49 @@ export class SubagentTracker {
   }
 
   // ── Private helpers ────────────────────────────────────────────────────
+
+  /**
+   * Shared logic for onSpawnResult and onBackfillResult.
+   * Inserts the DB record (if not already done) with the correct status.
+   */
+  private commitSpawnResult(toolCallId: string, parsed: Record<string, unknown>): void {
+    const childSessionKey = typeof parsed?.childSessionKey === 'string' ? parsed.childSessionKey : '';
+    const isError = parsed?.status === 'error';
+    const status = isError ? 'error' : 'running';
+
+    // Store session key in memory
+    if (childSessionKey) {
+      this.subagentSessionKeys.set(toolCallId, childSessionKey);
+    }
+
+    // If already committed (e.g., onSpawnResult fired then backfill also fires), just update
+    if (this.subagentStatus.has(toolCallId)) {
+      // Update session key in DB if newly discovered
+      if (childSessionKey && !this.subagentSessionKeys.has(toolCallId)) {
+        this.store.updateSubagentRunSessionKey(toolCallId, childSessionKey);
+      }
+      return;
+    }
+
+    // First time: insert the DB record
+    this.subagentStatus.set(toolCallId, status);
+    const pending = this.pendingSpawnInfo.get(toolCallId);
+    if (pending) {
+      this.store.insertSubagentRun({
+        id: toolCallId,
+        parentSessionId: pending.parentSessionId,
+        sessionKey: childSessionKey || null,
+        agentId: pending.agentId,
+        task: pending.task,
+        label: pending.label,
+        status,
+        createdAt: pending.createdAt,
+      });
+      this.pendingSpawnInfo.delete(toolCallId);
+      console.log('[SubagentTracker] committed spawn result:', toolCallId, status,
+        isError ? parsed.error : '');
+    }
+  }
 
   private async discoverSubagentSessionKey(runId: string): Promise<string | null> {
     const client = this.getGatewayClient();
@@ -347,7 +436,7 @@ export class SubagentTracker {
               const blockType = typeof block.type === 'string' ? block.type : '';
               if (blockType === 'tool_use' || blockType === 'tool_call' || blockType === 'toolCall') {
                 const toolName = typeof block.name === 'string' ? block.name : 'tool';
-                const toolInput = isRecord(block.input) ? block.input as Record<string, unknown> : {};
+                const toolInput = resolveToolInput(block);
                 const toolUseId = typeof block.id === 'string' ? block.id : null;
                 messages.push({
                   id: crypto.randomUUID(),
@@ -357,6 +446,42 @@ export class SubagentTracker {
                   metadata: { toolName, toolInput, toolUseId },
                 });
               }
+            }
+          } else if (role === 'user' && Array.isArray(raw.content)) {
+            // User messages may contain tool_result blocks (Anthropic API format)
+            let hasToolResult = false;
+            for (const block of raw.content as unknown[]) {
+              if (!isRecord(block)) continue;
+              const blockType = typeof block.type === 'string' ? block.type : '';
+              if (blockType === 'tool_result') {
+                hasToolResult = true;
+                const resultText = typeof block.content === 'string'
+                  ? block.content
+                  : extractGatewayMessageText(block).trim();
+                const toolUseId = typeof block.tool_use_id === 'string' ? block.tool_use_id : null;
+                const isError = block.is_error === true;
+                if (resultText) {
+                  messages.push({
+                    id: crypto.randomUUID(),
+                    type: 'tool_result',
+                    content: resultText,
+                    timestamp: ts++,
+                    metadata: { toolResult: resultText, toolUseId, isError: isError || undefined },
+                  });
+                }
+              }
+            }
+            // If there was also text content alongside tool results, emit it
+            if (text && !shouldSuppressHeartbeatText('user', text)) {
+              messages.push({
+                id: crypto.randomUUID(),
+                type: 'user',
+                content: text,
+                timestamp: ts++,
+              });
+            }
+            if (!hasToolResult && !text) {
+              console.log('[SubagentTracker] dropped user message with empty text, keys:', Object.keys(raw).join(','));
             }
           } else if (text && !shouldSuppressHeartbeatText(role as 'user' | 'assistant' | 'system', text)) {
             const type = role === 'system' ? 'system' : role as 'user' | 'assistant';
@@ -401,7 +526,7 @@ export class SubagentTracker {
             const blockType = typeof block.type === 'string' ? block.type : '';
             if (blockType === 'tool_use' || blockType === 'tool_call' || blockType === 'toolCall') {
               const toolName = typeof block.name === 'string' ? block.name : 'tool';
-              const toolInput = isRecord(block.input) ? block.input as Record<string, unknown> : {};
+              const toolInput = resolveToolInput(block);
               const toolUseId = typeof block.id === 'string' ? block.id : null;
               messages.push({
                 id: crypto.randomUUID(),

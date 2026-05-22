@@ -24,6 +24,7 @@ interface AgentTreeNodeProps {
   selectedIds: Set<string>;
   showBatchOption?: boolean;
   subagentsBySessionId?: Record<string, SubagentSessionSummary[]>;
+  selectedSubagentId?: string | null;
   onSelectSubagent?: (subagent: SubagentSessionSummary) => void;
   onToggleExpanded: (agentId: string) => void;
   onEditAgent: (agent: AgentSidebarAgentNode) => void;
@@ -70,6 +71,7 @@ const AgentTreeNode: React.FC<AgentTreeNodeProps> = ({
   selectedIds,
   showBatchOption = false,
   subagentsBySessionId,
+  selectedSubagentId,
   onSelectSubagent,
   onToggleExpanded,
   onEditAgent,
@@ -406,6 +408,7 @@ const AgentTreeNode: React.FC<AgentTreeNodeProps> = ({
                     isSelected={selectedIds.has(task.id)}
                     isSelectionDisabled={isOutsideBatchAgent}
                     showBatchOption={showBatchOption && !isBatchMode}
+                    hasActiveSubagent={task.isSelected && selectedSubagentId != null}
                     onSelect={() => onSelectTask(task)}
                     onDelete={() => onDeleteTask(task)}
                     onShare={() => onShareTask(task)}
@@ -418,6 +421,7 @@ const AgentTreeNode: React.FC<AgentTreeNodeProps> = ({
                     <SubagentTaskRow
                       key={sub.id}
                       subagent={sub}
+                      isSelected={sub.id === selectedSubagentId}
                       onSelect={() => onSelectSubagent?.(sub)}
                     />
                   ))}
