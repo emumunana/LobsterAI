@@ -1120,15 +1120,18 @@ export class OpenClawConfigSync {
 
   private buildBrowserConfig(browserWebAccess: BrowserWebAccessConfig): Record<string, unknown> {
     const allowedHostnames = normalizeBrowserHostnamePolicyList(browserWebAccess.allowedHostnames);
+    const blockedHostnames = normalizeBrowserHostnamePolicyList(browserWebAccess.blockedHostnames);
     const ssrfPolicy = browserWebAccess.networkMode === BrowserNetworkMode.Strict
       ? {
           dangerouslyAllowPrivateNetwork: false,
           ...(allowedHostnames.length > 0
             ? { allowedHostnames, hostnameAllowlist: allowedHostnames }
             : {}),
+          ...(blockedHostnames.length > 0 ? { blockedHostnames } : {}),
         }
       : {
           dangerouslyAllowPrivateNetwork: true,
+          ...(blockedHostnames.length > 0 ? { blockedHostnames } : {}),
         };
 
     return {

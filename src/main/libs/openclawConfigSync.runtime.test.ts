@@ -1064,7 +1064,7 @@ describe('OpenClawConfigSync runtime config output', () => {
         networkMode: BrowserNetworkMode.Strict,
         followGlobalProxy: true,
         allowedHostnames: ['https://Localhost:8443/path'],
-        blockedHostnames: [],
+        blockedHostnames: ['https://www.baidu.com/search'],
         snapshotMode: BrowserSnapshotMode.Efficient,
         evaluateEnabled: false,
         executablePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
@@ -1117,6 +1117,7 @@ describe('OpenClawConfigSync runtime config output', () => {
         dangerouslyAllowPrivateNetwork: false,
         allowedHostnames: ['localhost'],
         hostnameAllowlist: ['localhost'],
+        blockedHostnames: ['www.baidu.com'],
       },
     });
     expect(config.browser.cdpUrl).toBeUndefined();

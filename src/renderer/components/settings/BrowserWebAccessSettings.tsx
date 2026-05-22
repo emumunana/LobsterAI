@@ -18,31 +18,9 @@ interface BrowserWebAccessSettingsProps {
 
 const HostnameListTarget = {
   BlockedHostnames: 'blockedHostnames',
-  AllowedHostnames: 'allowedHostnames',
 } as const;
 
 type HostnameListTarget = typeof HostnameListTarget[keyof typeof HostnameListTarget];
-
-const Switch: React.FC<{
-  checked: boolean;
-  onChange: (checked: boolean) => void;
-}> = ({ checked, onChange }) => (
-  <button
-    type="button"
-    role="switch"
-    aria-checked={checked}
-    onClick={() => onChange(!checked)}
-    className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors ${
-      checked ? 'bg-primary' : 'bg-gray-300 dark:bg-gray-600'
-    }`}
-  >
-    <span
-      className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-        checked ? 'translate-x-6' : 'translate-x-1'
-      }`}
-    />
-  </button>
-);
 
 const SettingRow: React.FC<{
   title: string;
@@ -137,16 +115,7 @@ const BrowserWebAccessSettings: React.FC<BrowserWebAccessSettingsProps> = ({
     });
   };
 
-  const getHostnames = (target: HostnameListTarget): string[] => (
-    target === HostnameListTarget.AllowedHostnames ? value.allowedHostnames : value.blockedHostnames
-  );
-
-  const updateHostnames = (target: HostnameListTarget, hostnames: string[]) => {
-    if (target === HostnameListTarget.AllowedHostnames) {
-      update({ allowedHostnames: normalizeBrowserHostnameList(hostnames) });
-      return;
-    }
-
+  const updateHostnames = (hostnames: string[]) => {
     update({ blockedHostnames: normalizeBrowserHostnameList(hostnames) });
   };
 
@@ -161,7 +130,7 @@ const BrowserWebAccessSettings: React.FC<BrowserWebAccessSettingsProps> = ({
   };
 
   const normalizedHostnameDraft = normalizeBrowserHostnameList([hostnameDraft])[0] ?? '';
-  const currentDialogHostnames = hostnameDialogTarget ? getHostnames(hostnameDialogTarget) : [];
+  const currentDialogHostnames = hostnameDialogTarget ? value.blockedHostnames : [];
   const canAddHostname = Boolean(
     hostnameDialogTarget
     && normalizedHostnameDraft
@@ -173,20 +142,16 @@ const BrowserWebAccessSettings: React.FC<BrowserWebAccessSettingsProps> = ({
       return;
     }
 
-    updateHostnames(hostnameDialogTarget, [...currentDialogHostnames, normalizedHostnameDraft]);
+    updateHostnames([...currentDialogHostnames, normalizedHostnameDraft]);
     closeHostnameDialog();
   };
 
-  const removeHostname = (target: HostnameListTarget, hostname: string) => {
-    updateHostnames(target, getHostnames(target).filter(item => item !== hostname));
+  const removeHostname = (hostname: string) => {
+    updateHostnames(value.blockedHostnames.filter(item => item !== hostname));
   };
 
-  const hostnameDialogTitle = hostnameDialogTarget === HostnameListTarget.BlockedHostnames
-    ? i18nService.t('browserAddBlockedHostnameTitle')
-    : i18nService.t('browserAddAllowedHostnameTitle');
-  const hostnameDialogDescription = hostnameDialogTarget === HostnameListTarget.BlockedHostnames
-    ? i18nService.t('browserAddBlockedHostnameDescription')
-    : i18nService.t('browserAddAllowedHostnameDescription');
+  const hostnameDialogTitle = i18nService.t('browserAddBlockedHostnameTitle');
+  const hostnameDialogDescription = i18nService.t('browserAddBlockedHostnameDescription');
 
   const networkModeDescription = value.networkMode === BrowserNetworkMode.Strict
     ? i18nService.t('browserNetworkStrictDescription')
@@ -213,43 +178,14 @@ const BrowserWebAccessSettings: React.FC<BrowserWebAccessSettingsProps> = ({
           )}
         />
 
-        <SettingRow
-          title={i18nService.t('browserEvaluateEnabled')}
-          description={i18nService.t('browserEvaluateEnabledDescription')}
-          control={(
-            <Switch
-              checked={value.evaluateEnabled}
-              onChange={(checked) => update({ evaluateEnabled: checked })}
-            />
-          )}
-        />
-
-        <SettingRow
-          title={i18nService.t('browserHeadless')}
-          description={i18nService.t('browserHeadlessDescription')}
-          control={(
-            <Switch
-              checked={value.headless === true}
-              onChange={(checked) => update({ headless: checked || undefined })}
-            />
-          )}
-        />
-
         <HostnameList
           title={i18nService.t('browserBlockedHostnames')}
           description={i18nService.t('browserBlockedHostnamesDescription')}
           hostnames={value.blockedHostnames}
           onAdd={() => openHostnameDialog(HostnameListTarget.BlockedHostnames)}
-          onRemove={(hostname) => removeHostname(HostnameListTarget.BlockedHostnames, hostname)}
+          onRemove={removeHostname}
         />
 
-        <HostnameList
-          title={i18nService.t('browserAllowedHostnames')}
-          description={i18nService.t('browserAllowedHostnamesDescription')}
-          hostnames={value.allowedHostnames}
-          onAdd={() => openHostnameDialog(HostnameListTarget.AllowedHostnames)}
-          onRemove={(hostname) => removeHostname(HostnameListTarget.AllowedHostnames, hostname)}
-        />
       </div>
 
       {hostnameDialogTarget ? (
