@@ -2,7 +2,7 @@ import { EyeIcon, EyeSlashIcon, XCircleIcon as XCircleIconSolid } from '@heroico
 import { ArrowTopRightOnSquareIcon, CheckCircleIcon, KeyIcon, ShieldCheckIcon, SignalIcon, XCircleIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import React from 'react';
 
-import { ProviderRegistry } from '../../../shared/providers';
+import { ProviderAuthType, ProviderName, ProviderRegistry } from '../../../shared/providers';
 import { defaultConfig, getCustomProviderDefaultName, getProviderDisplayName, isCustomProvider } from '../../config';
 import { getProviderIcon } from '../../providers/uiRegistry';
 import { i18nService } from '../../services/i18n';
@@ -480,6 +480,13 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
   handleTestConnection,
   handleAddModel, handleEditModel, handleDeleteModel,
 }) => {
+  const copilotProvider = providers[ProviderName.Copilot];
+  const copilotAuthInProgress = copilotAuthStatus === 'requesting'
+    || copilotAuthStatus === 'awaiting_user'
+    || copilotAuthStatus === 'polling';
+  const copilotSignedIn = copilotAuthStatus === 'authenticated'
+    || copilotProvider?.authType === ProviderAuthType.OAuth;
+
   return (
     <>
           <div className="flex h-full">
@@ -1157,13 +1164,13 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                 </div>
               )}
 
-              {activeProvider === 'github-copilot' && (
+              {activeProvider === ProviderName.Copilot && (
                 <div>
                   <label className="block text-xs font-medium dark:text-claude-darkText text-claude-text mb-2">
                     {i18nService.t('githubCopilotAuth')}
                   </label>
 
-                  {(copilotAuthStatus === 'idle' || copilotAuthStatus === 'error') && !providers['github-copilot'].apiKey && (
+                  {(copilotAuthStatus === 'idle' || copilotAuthStatus === 'error') && !copilotSignedIn && (
                     <div className="space-y-2">
                       <button
                         type="button"
@@ -1236,7 +1243,7 @@ const ModelSettingsSection: React.FC<ModelSettingsSectionProps> = ({
                     </div>
                   )}
 
-                  {(copilotAuthStatus === 'authenticated' || providers['github-copilot'].apiKey) && copilotAuthStatus !== 'requesting' && copilotAuthStatus !== 'awaiting_user' && copilotAuthStatus !== 'polling' && (
+                  {copilotSignedIn && !copilotAuthInProgress && (
                     <div className="flex items-center justify-between p-3 rounded-xl bg-claude-surfaceInset dark:bg-claude-darkSurfaceInset border border-claude-border dark:border-claude-darkBorder">
                       <div className="flex items-center gap-2">
                         <div className="w-2 h-2 rounded-full bg-green-500" />

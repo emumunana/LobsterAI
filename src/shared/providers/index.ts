@@ -5,6 +5,7 @@ export {
   AuthType,
   OpenClawApi,
   OpenClawProviderId,
+  ProviderAuthType,
   ProviderName,
   ProviderRegistry,
 } from './constants';

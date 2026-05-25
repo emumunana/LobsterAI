@@ -241,20 +241,10 @@ const App: React.FC = () => {
   useEffect(() => {
     const removeListener = window.electron.githubCopilot.onTokenUpdated(({ token, baseUrl }) => {
       console.log('[App] received Copilot token update from main process');
-      const currentConfig = configService.getConfig();
-      const copilotProvider = currentConfig.providers?.['github-copilot'];
-      if (copilotProvider) {
-        void configService.updateConfig({
-          providers: {
-            ...currentConfig.providers,
-            'github-copilot': {
-              ...copilotProvider,
-              apiKey: token,
-              ...(baseUrl ? { baseUrl } : {}),
-            },
-          },
-        } as Partial<typeof currentConfig>);
-      }
+      apiService.setProviderRuntimeCredential(ProviderName.Copilot, {
+        apiKey: token,
+        ...(baseUrl ? { baseUrl } : {}),
+      });
     });
     return removeListener;
   }, []);

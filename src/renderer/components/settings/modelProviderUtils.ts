@@ -2,7 +2,7 @@
  * Shared types, constants, and utility functions for model/provider settings.
  * Used by both Settings.tsx and ModelSettingsSection.tsx.
  */
-import { OpenClawProviderId, ProviderName, ProviderRegistry } from '../../../shared/providers';
+import { OpenClawProviderId, ProviderAuthType, ProviderName, ProviderRegistry } from '../../../shared/providers';
 import { type AppConfig, defaultConfig } from '../../config';
 import { i18nService } from '../../services/i18n';
 
@@ -38,22 +38,28 @@ export const getOpenClawProviderIdForConfig = (
   return ProviderRegistry.getOpenClawProviderId(providerName);
 };
 
-export const providerRequiresApiKey = (provider: ProviderType) => provider !== 'ollama' && provider !== 'lm-studio' && provider !== 'github-copilot';
+export const providerRequiresApiKey = (provider: ProviderType) => provider !== ProviderName.Ollama
+  && provider !== ProviderName.LmStudio
+  && provider !== ProviderName.Copilot;
 
 export const hasProviderAuthConfigured = (provider: ProviderType, config: ProviderConfig): boolean => {
-  if (provider === 'ollama' || provider === 'lm-studio') {
+  if (provider === ProviderName.Ollama || provider === ProviderName.LmStudio) {
     return true;
   }
 
-  if (provider === 'minimax') {
-    if (config.authType === 'apikey') {
+  if (provider === ProviderName.Minimax) {
+    if (config.authType === ProviderAuthType.ApiKey) {
       return config.apiKey.trim().length > 0;
     }
     return (config.oauthAccessToken?.trim().length ?? 0) > 0;
   }
 
-  if (provider === 'openai' && config.authType === 'oauth') {
+  if (provider === ProviderName.OpenAI && config.authType === ProviderAuthType.OAuth) {
     return true;
+  }
+
+  if (provider === ProviderName.Copilot) {
+    return config.authType === ProviderAuthType.OAuth;
   }
 
   return config.apiKey.trim().length > 0;
@@ -69,7 +75,7 @@ export const getFixedApiFormatForProvider = (provider: string): 'anthropic' | 'o
   if (provider === 'openai' || provider === 'stepfun') {
     return 'openai';
   }
-  if (provider === 'youdaozhiyun' || provider === 'github-copilot' || provider === 'qianfan') {
+  if (provider === ProviderName.Youdaozhiyun || provider === ProviderName.Copilot || provider === ProviderName.Qianfan) {
     return 'openai';
   }
   if (provider === 'moonshot') {
@@ -179,7 +185,7 @@ export const buildOpenAICompatibleChatCompletionsUrl = (baseUrl: string, provide
     return `${normalized}/v1beta/openai/chat/completions`;
   }
 
-  if (provider === 'github-copilot') {
+  if (provider === ProviderName.Copilot) {
     return `${normalized}/chat/completions`;
   }
 

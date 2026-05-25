@@ -97,6 +97,12 @@ export const AuthType = {
 } as const;
 export type AuthType = typeof AuthType[keyof typeof AuthType];
 
+export const ProviderAuthType = {
+  ApiKey: 'apikey',
+  OAuth: 'oauth',
+} as const;
+export type ProviderAuthType = typeof ProviderAuthType[keyof typeof ProviderAuthType];
+
 // ═══════════════════════════════════════════════════════
 // 2. Provider Definition Shape
 // ═══════════════════════════════════════════════════════

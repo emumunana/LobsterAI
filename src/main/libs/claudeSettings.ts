@@ -182,7 +182,9 @@ function getEffectiveProviderApiFormat(providerName: string, apiFormat: unknown)
 }
 
 function providerRequiresApiKey(providerName: string): boolean {
-  return providerName !== ProviderName.Ollama && providerName !== ProviderName.LmStudio;
+  return providerName !== ProviderName.Ollama
+    && providerName !== ProviderName.LmStudio
+    && providerName !== ProviderName.Copilot;
 }
 
 function shouldUseOpenAICodexOAuth(providerName: string, providerConfig: LocalProviderConfig): boolean {

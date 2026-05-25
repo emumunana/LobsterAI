@@ -1,4 +1,4 @@
-import type { ApiFormat } from './constants';
+import type { ApiFormat, ProviderAuthType } from './constants';
 
 export interface ProviderConfig {
   enabled: boolean;
@@ -14,7 +14,7 @@ export interface ProviderConfig {
   }>;
   displayName?: string;
   codingPlanEnabled?: boolean;
-  authType?: 'apikey' | 'oauth';
+  authType?: ProviderAuthType;
   /** OAuth access token (stored separately from apiKey to avoid conflicts) */
   oauthAccessToken?: string;
   /** Base URL returned by OAuth resource_url (stored separately from user-configured baseUrl) */
