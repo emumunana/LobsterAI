@@ -2,6 +2,7 @@ export const ArtifactTypeValue = {
   Html: 'html',
   Svg: 'svg',
   Image: 'image',
+  Video: 'video',
   Mermaid: 'mermaid',
   Code: 'code',
   Markdown: 'markdown',
@@ -9,6 +10,8 @@ export const ArtifactTypeValue = {
   Document: 'document',
   LocalService: 'local-service',
 } as const;
+
+export type ArtifactSource = 'inline' | 'tool' | 'file';
 export type ArtifactType = typeof ArtifactTypeValue[keyof typeof ArtifactTypeValue];
 
 export const PREVIEWABLE_ARTIFACT_TYPES = new Set<ArtifactType>([
@@ -16,6 +19,7 @@ export const PREVIEWABLE_ARTIFACT_TYPES = new Set<ArtifactType>([
   ArtifactTypeValue.Svg,
   ArtifactTypeValue.Mermaid,
   ArtifactTypeValue.Image,
+  ArtifactTypeValue.Video,
   ArtifactTypeValue.Markdown,
   ArtifactTypeValue.Text,
   ArtifactTypeValue.Document,
@@ -34,6 +38,8 @@ export interface Artifact {
   filePath?: string;
   url?: string;
   contentVersion?: number;
+  remoteUrl?: string;
+  source?: ArtifactSource;
   createdAt: number;
 }
 

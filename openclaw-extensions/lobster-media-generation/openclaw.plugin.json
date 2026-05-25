@@ -1,0 +1,24 @@
+{
+  "id": "lobster-media-generation",
+  "name": "LobsterMediaGeneration",
+  "description": "Image and video generation tools powered by LobsterAI server.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "callbackUrl": {
+        "type": "string",
+        "description": "LobsterAI HTTP callback URL for media generation requests"
+      },
+      "secret": {
+        "type": "string",
+        "description": "Shared secret for callback authentication"
+      },
+      "requestTimeoutMs": {
+        "type": "number",
+        "minimum": 1000,
+        "description": "Request timeout in milliseconds"
+      }
+    }
+  }
+}

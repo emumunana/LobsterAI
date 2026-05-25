@@ -9,8 +9,11 @@ import {
   CoworkSystemMessageKind,
   isInternalCompactionSystemText,
 } from '../../../common/coworkSystemMessages';
+import { hasToolResultMediaAssets, normalizeFilePathForDedup } from '../../services/artifactParser';
 import { i18nService } from '../../services/i18n';
+import type { Artifact } from '../../types/artifact';
 import type { CoworkMessage, CoworkMessageMetadata } from '../../types/cowork';
+import type { MediaPollingGroup } from './MediaPollingIndicator';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -26,6 +29,7 @@ export type ToolGroupItem = {
   type: 'tool_group';
   toolUse: CoworkMessage;
   toolResult?: CoworkMessage | null;
+  mediaPollOrdinal?: number;
 };
 
 export type DisplayItem =
@@ -547,5 +551,414 @@ export const getContextCompactionMessageLabel = (message: CoworkMessage, fallbac
         ? fallbackContent
         : i18nService.t('coworkContextCompactionCompleted');
   }
+};
+
+// ── Media generation utilities ──────────────────────────────────────────────
+
+const MEDIA_TOKEN_MARKER_RE = /(^|\n)\s*MEDIA(?::\s*`?[^`\n]+?`?)?\s*$/im;
+const PARTIAL_MEDIA_TOKEN_MARKER_RE = /(^|\n)\s*(?:M|ME|MED|MEDI|MEDIA)(?::\s*`?[^`\n]+?`?)?\s*$/im;
+const MEDIA_FILE_LINK_DISPLAY_RE = /\[([^\]]+)\]\((file:\/\/[^)]*\.(?:png|jpe?g|gif|webp|bmp|avif|mp4|webm|mov)(?:\?[^)]*)?)\)/gi;
+const LOCAL_VIDEO_PATH_DISPLAY_RE = /(?:^|[\s"'`(：:])((?:\/|[A-Za-z]:\/)[^\n"'`()\[\]]+\.(?:mp4|webm|mov))(?:[\s"'`)]|$)/gi;
+const SAVED_GENERATED_MEDIA_RE = /^Saved generated (?:video|image)s?:/i;
+const GENERATED_MEDIA_SUCCEEDED_RE = /^(?:Video|Image) generation succeeded\./i;
+const GENERATED_VIDEO_TEXT_RE = /(?:视频(?:已生成|生成完成)|video\s+(?:generated|generation\s+succeeded|generation\s+complete))/i;
+const TERMINAL_MEDIA_STATUSES = new Set(['succeeded', 'failed', 'timeout', 'cancelled']);
+
+export type MediaStreamingInfo = {
+  taskId?: string;
+  upstreamTaskId?: string;
+  pollCount?: number;
+};
+
+export type ConsolidatedItem = AssistantTurnItem | { type: 'media_polling_group'; group: MediaPollingGroup };
+
+const stripMediaDisplayTokens = (value: string): string =>
+  value.replace(MEDIA_TOKEN_DISPLAY_RE, '').trimEnd();
+
+const getDisplayPathFromFileUrl = (url: string): string => {
+  let filePath = url.trim();
+  if (filePath.startsWith('file:///')) {
+    filePath = filePath.slice(7);
+  } else if (filePath.startsWith('file://')) {
+    filePath = filePath.slice(7);
+  } else if (filePath.startsWith('file:/')) {
+    filePath = filePath.slice(5);
+  }
+  const queryIndex = filePath.search(/[?#]/);
+  if (queryIndex >= 0) {
+    filePath = filePath.slice(0, queryIndex);
+  }
+  try {
+    filePath = decodeURIComponent(filePath);
+  } catch {
+    // keep original
+  }
+  if (/^\/[A-Za-z]:/.test(filePath)) {
+    filePath = filePath.slice(1);
+  }
+  return filePath.replace(/\\/g, '/');
+};
+
+const stripMediaFileLinksForDisplay = (value: string): string =>
+  value
+    .replace(MEDIA_FILE_LINK_DISPLAY_RE, (_match, _label: string, url: string) => getDisplayPathFromFileUrl(url))
+    .replace(/([:：])\s*\n\s*((?:\/|[A-Za-z]:\/)[^\n]+\.(?:png|jpe?g|gif|webp|bmp|avif|mp4|webm|mov))/gi, '$1 $2')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trimEnd();
+
+export const getAssistantMessageDisplayText = (content: string): string =>
+  stripMediaDisplayTokens(stripMediaFileLinksForDisplay(content));
+
+const extractLocalVideoPathsFromText = (content: string): string[] => {
+  const paths: string[] = [];
+  const fileLinkRe = new RegExp(MEDIA_FILE_LINK_DISPLAY_RE.source, 'gi');
+  let fileLinkMatch: RegExpExecArray | null;
+  while ((fileLinkMatch = fileLinkRe.exec(content)) !== null) {
+    const url = fileLinkMatch[2];
+    if (/\.(?:mp4|webm|mov)(?:\?[^)]*)?$/i.test(url)) {
+      paths.push(getDisplayPathFromFileUrl(url));
+    }
+  }
+  const barePathRe = new RegExp(LOCAL_VIDEO_PATH_DISPLAY_RE.source, 'gi');
+  let barePathMatch: RegExpExecArray | null;
+  while ((barePathMatch = barePathRe.exec(content)) !== null) {
+    paths.push(getDisplayPathFromFileUrl(barePathMatch[1]));
+  }
+  return [...new Set(paths.filter(Boolean))];
+};
+
+export const getVideoPathArtifacts = (artifacts: Artifact[] | undefined): Artifact[] => {
+  if (!artifacts?.length) return [];
+  const result: Artifact[] = [];
+  const seen = new Set<string>();
+  for (const artifact of artifacts) {
+    if (artifact.type !== 'video' || !artifact.filePath) continue;
+    const key = normalizeFilePathForDedup(artifact.filePath);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(artifact);
+  }
+  return result;
+};
+
+export const isDuplicateGeneratedVideoAssistantMessage = (
+  message: CoworkMessage,
+  videoArtifacts: Artifact[],
+): boolean => {
+  if (videoArtifacts.length === 0) return false;
+  const rawContent = message.content || '';
+  const textPaths = extractLocalVideoPathsFromText(rawContent);
+  if (textPaths.length === 0) return false;
+
+  const artifactPaths = new Set(
+    videoArtifacts
+      .map(artifact => artifact.filePath)
+      .filter((filePath): filePath is string => Boolean(filePath))
+      .map(filePath => normalizeFilePathForDedup(filePath)),
+  );
+  const referencesGeneratedVideo = textPaths.some(filePath => artifactPaths.has(normalizeFilePathForDedup(filePath)));
+  if (!referencesGeneratedVideo) return false;
+
+  return GENERATED_VIDEO_TEXT_RE.test(rawContent)
+    || MEDIA_TOKEN_MARKER_RE.test(rawContent)
+    || PARTIAL_MEDIA_TOKEN_MARKER_RE.test(rawContent);
+};
+
+export const getMediaCompletionDisplayText = (
+  message: CoworkMessage,
+  content: string,
+): string | null => {
+  if (!hasToolResultMediaAssets(message)) return null;
+  const trimmed = content.trim();
+  const details = message.metadata?.toolResultDetails as Record<string, unknown> | undefined;
+  const status = typeof details?.status === 'string' ? details.status.trim().toLowerCase() : '';
+  if (
+    !SAVED_GENERATED_MEDIA_RE.test(trimmed) &&
+    !GENERATED_MEDIA_SUCCEEDED_RE.test(trimmed) &&
+    status !== 'succeeded'
+  ) {
+    return null;
+  }
+  return i18nService.t('mediaGenerationComplete');
+};
+
+export const isMediaStatusPoll = (group: ToolGroupItem): boolean => {
+  const toolName = group.toolUse.metadata?.toolName;
+  if (!toolName) return false;
+  const normalized = normalizeToolName(toolName);
+  if (normalized !== 'lobsteraivideogenerate' && normalized !== 'lobsteraiimagegenerate') return false;
+  const input = group.toolUse.metadata?.toolInput as Record<string, unknown> | undefined;
+  return input?.action === 'status' && typeof input?.taskId === 'string';
+};
+
+const getMediaStatusDetails = (group: ToolGroupItem): Record<string, unknown> | undefined => {
+  const liveDetails = group.toolUse.metadata?.mediaStatusDetails as Record<string, unknown> | undefined;
+  const resultDetails = group.toolResult?.metadata?.toolResultDetails as Record<string, unknown> | undefined;
+  if (!liveDetails) return resultDetails;
+  if (!resultDetails) return liveDetails;
+  const livePollCount = typeof liveDetails.pollCount === 'number' ? liveDetails.pollCount : undefined;
+  const resultPollCount = typeof resultDetails.pollCount === 'number' ? resultDetails.pollCount : undefined;
+  const pollCount = livePollCount == null
+    ? resultPollCount
+    : resultPollCount == null
+      ? livePollCount
+      : Math.max(livePollCount, resultPollCount);
+  return {
+    ...liveDetails,
+    ...resultDetails,
+    ...(pollCount != null ? { pollCount } : {}),
+  };
+};
+
+const readMediaPollCount = (value: unknown): number | undefined => (
+  typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : undefined
+);
+
+export const getDisplayMediaPollCount = (value: number | undefined): number | undefined => (
+  value != null && value > 1 ? value : undefined
+);
+
+const getMediaStatusDetailPollCount = (group: ToolGroupItem): number | undefined => {
+  const details = getMediaStatusDetails(group);
+  return readMediaPollCount(details?.pollCount);
+};
+
+const getMediaPollCount = (group: ToolGroupItem): number | undefined => {
+  const detailPollCount = getMediaStatusDetailPollCount(group);
+  if (detailPollCount == null) return group.mediaPollOrdinal;
+  if (group.mediaPollOrdinal == null) return detailPollCount;
+  return Math.max(detailPollCount, group.mediaPollOrdinal);
+};
+
+export const isMediaGenerateRunning = (group: ToolGroupItem): boolean => {
+  const toolName = group.toolUse.metadata?.toolName;
+  if (!toolName) return false;
+  const normalized = normalizeToolName(toolName);
+  if (normalized !== 'lobsteraivideogenerate') return false;
+  const input = group.toolUse.metadata?.toolInput as Record<string, unknown> | undefined;
+  const action = input?.action;
+  if (action !== 'generate' && action !== undefined) return false;
+  if (!group.toolResult) return true;
+  const meta = group.toolResult.metadata;
+  if (meta?.isStreaming && !meta?.isFinal) return true;
+  return false;
+};
+
+export const isMediaStatusPollRunning = (group: ToolGroupItem): boolean => {
+  if (!isMediaStatusPoll(group)) return false;
+  if (!group.toolResult) return true;
+  const meta = group.toolResult.metadata;
+  if (meta?.isStreaming && !meta?.isFinal) return true;
+  return false;
+};
+
+const getMediaTaskIdKeys = (info: Pick<MediaStreamingInfo, 'taskId' | 'upstreamTaskId'>): string[] => {
+  const keys = [info.taskId, info.upstreamTaskId]
+    .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    .map(value => value.trim());
+  return [...new Set(keys)];
+};
+
+const setRetainedMediaPollCount = (
+  counts: Map<string, number>,
+  info: Pick<MediaStreamingInfo, 'taskId' | 'upstreamTaskId'>,
+  pollCount: number | undefined,
+): void => {
+  const displayPollCount = getDisplayMediaPollCount(pollCount);
+  if (displayPollCount == null) return;
+  for (const key of getMediaTaskIdKeys(info)) {
+    counts.set(key, Math.max(counts.get(key) ?? 0, displayPollCount));
+  }
+};
+
+export const getRetainedMediaPollCount = (
+  info: Pick<MediaStreamingInfo, 'taskId' | 'upstreamTaskId'>,
+  retainedCounts?: Map<string, number>,
+): number | undefined => {
+  if (!retainedCounts) return undefined;
+  let pollCount: number | undefined;
+  for (const key of getMediaTaskIdKeys(info)) {
+    const retained = retainedCounts.get(key);
+    if (retained != null) {
+      pollCount = Math.max(pollCount ?? 0, retained);
+    }
+  }
+  return getDisplayMediaPollCount(pollCount);
+};
+
+export const parseMediaStreamingInfo = (group: ToolGroupItem): MediaStreamingInfo => {
+  const input = group.toolUse.metadata?.toolInput as Record<string, unknown> | undefined;
+  const inputTaskId = typeof input?.taskId === 'string' && input.taskId.trim()
+    ? input.taskId.trim()
+    : undefined;
+  const statusFallbackPollCount = input?.action === 'status' ? group.mediaPollOrdinal : undefined;
+  const details = getMediaStatusDetails(group);
+  const pollCount = getDisplayMediaPollCount(getMediaPollCount(group) ?? statusFallbackPollCount);
+  if (details?.taskId || inputTaskId) {
+    return {
+      taskId: details?.taskId ? String(details.taskId) : inputTaskId,
+      upstreamTaskId: details?.upstreamTaskId ? String(details.upstreamTaskId) : undefined,
+      ...(pollCount != null ? { pollCount } : {}),
+    };
+  }
+  if (!group.toolResult) {
+    return inputTaskId
+      ? { taskId: inputTaskId, ...(pollCount != null ? { pollCount } : {}) }
+      : {};
+  }
+  return {};
+};
+
+export const collectMediaPollCounts = (items: ConsolidatedItem[]): Map<string, number> => {
+  const counts = new Map<string, number>();
+  for (const item of items) {
+    if (item.type === 'media_polling_group') {
+      setRetainedMediaPollCount(
+        counts,
+        { taskId: item.group.taskId, upstreamTaskId: item.group.upstreamTaskId },
+        item.group.pollCount,
+      );
+      continue;
+    }
+    if (item.type !== 'tool_group') continue;
+    const info = parseMediaStreamingInfo(item.group);
+    setRetainedMediaPollCount(counts, info, info.pollCount);
+  }
+  return counts;
+};
+
+const extractMediaPollStatus = (poll: ToolGroupItem): string | null => {
+  const details = getMediaStatusDetails(poll);
+  if (typeof details?.status === 'string' && details.status.trim()) {
+    return details.status.trim();
+  }
+  const result = poll.toolResult;
+  if (!result) return null;
+  const text = result.content || (result.metadata?.toolResult as string) || '';
+  const match = text.match(/^Status:\s*(\S+)/m);
+  return match ? match[1] : null;
+};
+
+const extractUpstreamTaskId = (poll: ToolGroupItem): string | undefined => {
+  const details = getMediaStatusDetails(poll);
+  return details?.upstreamTaskId ? String(details.upstreamTaskId) : undefined;
+};
+
+const extractMediaPollCount = (poll: ToolGroupItem): number | undefined => {
+  return getMediaPollCount(poll);
+};
+
+export const consolidateMediaPolling = (items: AssistantTurnItem[]): ConsolidatedItem[] => {
+  const pollsByTaskId = new Map<string, { toolName: string; indices: number[] }>();
+  const mediaPollOrdinals = new Map<number, number>();
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    if (item.type === 'tool_group' && isMediaStatusPoll(item.group)) {
+      const toolName = item.group.toolUse.metadata!.toolName!;
+      const input = item.group.toolUse.metadata!.toolInput as Record<string, string>;
+      const taskId = input.taskId;
+      const entry = pollsByTaskId.get(taskId);
+      if (entry) {
+        entry.indices.push(i);
+      } else {
+        pollsByTaskId.set(taskId, { toolName, indices: [i] });
+      }
+    }
+  }
+
+  for (const { indices } of pollsByTaskId.values()) {
+    let cumulativePollCount = 0;
+    for (const itemIndex of indices) {
+      const group = (items[itemIndex] as { type: 'tool_group'; group: ToolGroupItem }).group;
+      const detailPollCount = getMediaStatusDetailPollCount(group);
+      const nextPollCount = detailPollCount == null
+        ? cumulativePollCount + 1
+        : detailPollCount > cumulativePollCount
+          ? detailPollCount
+          : cumulativePollCount + detailPollCount;
+      cumulativePollCount = Math.max(cumulativePollCount, nextPollCount);
+      mediaPollOrdinals.set(itemIndex, cumulativePollCount);
+    }
+  }
+
+  const skipIndices = new Set<number>();
+  const insertAfterIndex = new Map<number, MediaPollingGroup>();
+
+  for (const [taskId, { toolName, indices }] of pollsByTaskId) {
+    if (indices.length < 2) continue;
+    const consolidatedPolls: ToolGroupItem[] = [];
+    for (let k = 1; k < indices.length; k++) {
+      skipIndices.add(indices[k]);
+      const group = (items[indices[k]] as { type: 'tool_group'; group: ToolGroupItem }).group;
+      consolidatedPolls.push({
+        ...group,
+        mediaPollOrdinal: mediaPollOrdinals.get(indices[k]),
+      });
+    }
+    const lastPoll = consolidatedPolls[consolidatedPolls.length - 1];
+    const lastStatus = extractMediaPollStatus(lastPoll);
+    let isComplete = lastStatus != null && TERMINAL_MEDIA_STATUSES.has(lastStatus);
+
+    if (!isComplete) {
+      const completionPattern = new RegExp(
+        `Task ID: ${taskId}[\\s\\S]*?generation (succeeded|failed|timed out|cancelled)`
+        + `|generation (succeeded|failed|timed out|cancelled)[\\s\\S]*?Task ID: ${taskId}`,
+        'i',
+      );
+      for (const item of items) {
+        if (item.type === 'system' || item.type === 'tool_result') {
+          if (completionPattern.test(item.message.content)) {
+            isComplete = true;
+            break;
+          }
+          const details = item.message.metadata?.toolResultDetails as Record<string, unknown> | undefined;
+          if (details?.status && TERMINAL_MEDIA_STATUSES.has(details.status as string)) {
+            isComplete = true;
+            break;
+          }
+          if (/^Saved generated (video|image)s?:/m.test(item.message.content)) {
+            isComplete = true;
+            break;
+          }
+        }
+      }
+    }
+    const lastIndex = indices[indices.length - 1];
+    insertAfterIndex.set(lastIndex, {
+      type: 'media_polling_group',
+      toolName,
+      taskId,
+      upstreamTaskId: extractUpstreamTaskId(lastPoll),
+      lastStatus,
+      pollCount: extractMediaPollCount(lastPoll) ?? indices.length,
+      polls: consolidatedPolls,
+      isComplete,
+    });
+  }
+
+  const result: ConsolidatedItem[] = [];
+  for (let i = 0; i < items.length; i++) {
+    if (!skipIndices.has(i)) {
+      const item = items[i];
+      const mediaPollOrdinal = mediaPollOrdinals.get(i);
+      if (item.type === 'tool_group' && mediaPollOrdinal != null) {
+        result.push({
+          ...item,
+          group: { ...item.group, mediaPollOrdinal },
+        });
+      } else {
+        result.push(item);
+      }
+    }
+    const group = insertAfterIndex.get(i);
+    if (group) {
+      result.push({ type: 'media_polling_group', group });
+    }
+  }
+
+  return result;
 };
 

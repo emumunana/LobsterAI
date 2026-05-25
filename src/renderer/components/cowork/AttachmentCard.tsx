@@ -8,6 +8,7 @@ import type { DraftAttachment } from '../../store/slices/coworkSlice';
 interface AttachmentCardProps {
   attachment: DraftAttachment;
   onRemove: (path: string) => void;
+  label?: string;
 }
 
 /**
@@ -15,16 +16,16 @@ interface AttachmentCardProps {
  * - Image attachments: 64×64 thumbnail with overlay file name
  * - Non-image attachments: horizontal card with file-type icon + name + type label
  */
-const AttachmentCard: React.FC<AttachmentCardProps> = ({ attachment, onRemove }) => {
+const AttachmentCard: React.FC<AttachmentCardProps> = ({ attachment, onRemove, label }) => {
   if (attachment.isImage) {
-    return <ImageCard attachment={attachment} onRemove={onRemove} />;
+    return <ImageCard attachment={attachment} onRemove={onRemove} label={label} />;
   }
-  return <FileCard attachment={attachment} onRemove={onRemove} />;
+  return <FileCard attachment={attachment} onRemove={onRemove} label={label} />;
 };
 
 // ── Image thumbnail card ──────────────────────────────────────────
 
-const ImageCard: React.FC<AttachmentCardProps> = ({ attachment, onRemove }) => {
+const ImageCard: React.FC<AttachmentCardProps> = ({ attachment, onRemove, label }) => {
   const [thumbUrl, setThumbUrl] = useState<string | null>(attachment.dataUrl ?? null);
   const [imgError, setImgError] = useState(false);
   const [loading, setLoading] = useState(!attachment.dataUrl);
@@ -89,6 +90,13 @@ const ImageCard: React.FC<AttachmentCardProps> = ({ attachment, onRemove }) => {
         </span>
       </div>
 
+      {/* Media label badge — top-left */}
+      {label && (
+        <div className="absolute top-0.5 left-0.5 rounded bg-primary/80 px-1 py-px">
+          <span className="text-[9px] font-medium leading-tight text-white">{label}</span>
+        </div>
+      )}
+
       {/* Delete button — top-right, visible on hover */}
       <button
         type="button"
@@ -105,8 +113,8 @@ const ImageCard: React.FC<AttachmentCardProps> = ({ attachment, onRemove }) => {
 
 // ── Non-image file card ───────────────────────────────────────────
 
-const FileCard: React.FC<AttachmentCardProps> = ({ attachment, onRemove }) => {
-  const { label } = getFileTypeInfo(attachment.name);
+const FileCard: React.FC<AttachmentCardProps> = ({ attachment, onRemove, label }) => {
+  const { label: typeLabel } = getFileTypeInfo(attachment.name);
 
   return (
     <div
@@ -119,10 +127,10 @@ const FileCard: React.FC<AttachmentCardProps> = ({ attachment, onRemove }) => {
       {/* File name + type label */}
       <div className="flex min-w-0 flex-1 flex-col justify-center">
         <span className="truncate text-xs font-medium dark:text-claude-darkText text-claude-text">
-          {attachment.name}
+          {label ? `${label} · ${attachment.name}` : attachment.name}
         </span>
         <span className="text-[10px] dark:text-claude-darkTextSecondary text-claude-textSecondary">
-          {label}
+          {typeLabel}
         </span>
       </div>
 

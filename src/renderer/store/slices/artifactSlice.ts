@@ -1,6 +1,6 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
 
-import { normalizeFilePathForDedup, normalizeLocalServiceUrlForDedup } from '../../services/artifactParser';
+import { dedupeArtifactsForDisplay, normalizeFilePathForDedup, normalizeLocalServiceUrlForDedup } from '../../services/artifactParser';
 import { type Artifact, ArtifactTypeValue } from '../../types/artifact';
 import type { RootState } from '../index';
 
@@ -50,6 +50,10 @@ const initialState: ArtifactState = {
 };
 
 const getPreviewTabId = (artifactId: string): string => `artifact:${artifactId}`;
+
+const isMediaArtifact = (artifact: Artifact): boolean => (
+  artifact.type === 'image' || artifact.type === 'video'
+);
 
 const findArtifactSessionId = (state: ArtifactState, artifactId: string): string | null => {
   for (const [sessionId, artifacts] of Object.entries(state.artifactsBySession)) {
@@ -128,8 +132,9 @@ const artifactSlice = createSlice({
   initialState,
   reducers: {
     setSessionArtifacts(state, action: PayloadAction<{ sessionId: string; artifacts: Artifact[] }>) {
-      state.artifactsBySession[action.payload.sessionId] = action.payload.artifacts;
-      const knownIds = new Set(action.payload.artifacts.map(artifact => artifact.id));
+      const artifacts = dedupeArtifactsForDisplay(action.payload.artifacts);
+      state.artifactsBySession[action.payload.sessionId] = artifacts;
+      const knownIds = new Set(artifacts.map(artifact => artifact.id));
       const tabs = state.previewTabsBySession[action.payload.sessionId] ?? [];
       state.previewTabsBySession[action.payload.sessionId] = tabs.filter(tab => knownIds.has(tab.artifactId));
       const activeTabId = state.activePreviewTabIdBySession[action.payload.sessionId];
@@ -179,6 +184,31 @@ const artifactSlice = createSlice({
             if (artifact.content || !old.content || artifact.contentVersion !== old.contentVersion) {
               state.artifactsBySession[sessionId][dupIndex] = artifact;
               replacePreviewTabArtifactId(state, sessionId, old.id, artifact.id);
+            }
+            return;
+          }
+        }
+        if (artifact.filePath && artifact.remoteUrl && isMediaArtifact(artifact)) {
+          const dupIndex = state.artifactsBySession[sessionId].findIndex(
+            a => !a.filePath && a.type === artifact.type && a.content === artifact.remoteUrl
+          );
+          if (dupIndex >= 0) {
+            state.artifactsBySession[sessionId][dupIndex] = artifact;
+            return;
+          }
+        }
+        if (!artifact.filePath && isMediaArtifact(artifact) && artifact.content) {
+          const localExists = state.artifactsBySession[sessionId].some(
+            a => a.type === artifact.type && a.filePath && a.remoteUrl === artifact.content
+          );
+          if (localExists) return;
+          const dupIndex = state.artifactsBySession[sessionId].findIndex(
+            a => !a.filePath && a.type === artifact.type && a.content === artifact.content
+          );
+          if (dupIndex >= 0) {
+            const old = state.artifactsBySession[sessionId][dupIndex];
+            if (artifact.content || !old.content) {
+              state.artifactsBySession[sessionId][dupIndex] = artifact;
             }
             return;
           }
@@ -296,7 +326,7 @@ export const {
 } = artifactSlice.actions;
 
 export const selectSessionArtifacts = (state: RootState, sessionId: string): Artifact[] =>
-  state.artifact.artifactsBySession[sessionId] ?? [];
+  dedupeArtifactsForDisplay(state.artifact.artifactsBySession[sessionId] ?? []);
 
 export const selectSelectedArtifact = (state: RootState): Artifact | null => {
   const id = state.artifact.selectedArtifactId;

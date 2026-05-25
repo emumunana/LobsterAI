@@ -8,6 +8,7 @@ import { BrowserIpc, type BrowserRuntimeProfile } from '../shared/browserWebAcce
 import { ClipboardIpc } from '../shared/clipboard/constants';
 import { DialogIpc } from '../shared/dialog/constants';
 import { type ListLocalWebServicesOptions, type LocalWebService, LocalWebServicesIpc } from '../shared/localWebServices/constants';
+import { CoworkIpcChannel } from '../shared/cowork/constants';
 import type { Platform } from '../shared/platform';
 import { NimQrLoginIpc } from './ipcHandlers/nimQrLogin';
 import { OpenClawSessionIpc } from './openclawSession/constants';
@@ -228,9 +229,9 @@ contextBridge.exposeInMainWorld('electron', {
   },
   cowork: {
     // Session management
-    startSession: (options: { prompt: string; cwd?: string; systemPrompt?: string; title?: string; activeSkillIds?: string[]; agentId?: string; modelOverride?: string; imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }> }) =>
+    startSession: (options: { prompt: string; cwd?: string; systemPrompt?: string; title?: string; activeSkillIds?: string[]; agentId?: string; modelOverride?: string; imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }>; mediaSelection?: { mode: string; modelId?: string; modelName?: string } }) =>
       ipcRenderer.invoke('cowork:session:start', options),
-    continueSession: (options: { sessionId: string; prompt: string; systemPrompt?: string; activeSkillIds?: string[]; imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }> }) =>
+    continueSession: (options: { sessionId: string; prompt: string; systemPrompt?: string; activeSkillIds?: string[]; imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }>; mediaSelection?: { mode: string; modelId?: string; modelName?: string }; mediaReferences?: Array<{ token: string; mediaType: string; index: number; fileId: string; fileName: string; mimeType: string; localPath?: string; remoteUrl?: string; role?: string }> }) =>
       ipcRenderer.invoke('cowork:session:continue', options),
     stopSession: (sessionId: string) =>
       ipcRenderer.invoke('cowork:session:stop', sessionId),
@@ -270,6 +271,10 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke('cowork:subTask:history', options),
     listSubagentSessions: (parentSessionId: string) =>
       ipcRenderer.invoke('cowork:subagent:list', { parentSessionId }),
+
+    // Media task management
+    cancelMediaTask: (taskId: string) =>
+      ipcRenderer.invoke('cowork:media:cancel', taskId),
 
     // Permission handling
     respondToPermission: (options: { requestId: string; result: any }) =>
@@ -330,6 +335,11 @@ contextBridge.exposeInMainWorld('electron', {
       const handler = (_event: any, data: { sessionId: string; messageId: string; content: string; metadata?: Record<string, unknown> }) => callback(data);
       ipcRenderer.on('cowork:stream:messageUpdate', handler);
       return () => ipcRenderer.removeListener('cowork:stream:messageUpdate', handler);
+    },
+    onMediaStatusPollUpdate: (callback: (data: { sessionId: string; toolCallId: string; details: Record<string, unknown> }) => void) => {
+      const handler = (_event: any, data: { sessionId: string; toolCallId: string; details: Record<string, unknown> }) => callback(data);
+      ipcRenderer.on(CoworkIpcChannel.MediaStatusPollUpdate, handler);
+      return () => ipcRenderer.removeListener(CoworkIpcChannel.MediaStatusPollUpdate, handler);
     },
     onStreamSessionStatus: (callback: (data: { sessionId: string; status: string }) => void) => {
       const handler = (_event: any, data: { sessionId: string; status: string }) => callback(data);
@@ -686,6 +696,12 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.on('auth:quotaChanged', handler);
       return () => ipcRenderer.removeListener('auth:quotaChanged', handler);
     },
+  },
+  media: {
+    getModels: (type: 'image' | 'video') =>
+      ipcRenderer.invoke('media:getModels', type) as Promise<{ success: boolean; models?: unknown[]; error?: string }>,
+    getTaskStatus: (taskId: number, type: 'image' | 'video') =>
+      ipcRenderer.invoke('media:getTaskStatus', taskId, type) as Promise<{ success: boolean; task?: unknown; error?: string }>,
   },
   feishu: {
     install: {

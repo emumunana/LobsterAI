@@ -96,6 +96,7 @@ class AuthService {
       if (result.success) {
         store.dispatch(setLoggedIn({ user: result.user, quota: result.quota }));
         await this.loadServerModels();
+        this.refreshQuota();
       }
     } catch (e) {
       console.error('Auth callback failed:', e);

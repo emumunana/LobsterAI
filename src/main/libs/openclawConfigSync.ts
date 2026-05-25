@@ -60,6 +60,7 @@ import { isSystemProxyEnabled } from './systemProxy';
 
 export type AskUserCallbackConfig = {
   callbackUrl: string;
+  mediaCallbackUrl: string;
   secret: string;
 };
 
@@ -1065,10 +1066,12 @@ type OpenClawConfigSyncDeps = {
   getIMSettings?: () => IMSettings | null;
   getResolvedMcpServers?: () => ResolvedMcpServer[];
   getAskUserCallbackUrl?: () => string | null;
+  getMediaCallbackUrl?: () => string | null;
   getMcpBridgeSecret?: () => string;
   getSkillsList?: () => Array<{ id: string; enabled: boolean }>;
   getAgents?: () => Agent[];
   getUserPlugins?: () => Array<{ pluginId: string; enabled: boolean; config?: Record<string, unknown> }>;
+  getSubscriptionStatus?: () => string;
 };
 
 export class OpenClawConfigSync {
@@ -1091,10 +1094,12 @@ export class OpenClawConfigSync {
   private readonly getIMSettings?: () => IMSettings | null;
   private readonly getResolvedMcpServers?: () => ResolvedMcpServer[];
   private readonly getAskUserCallbackUrl?: () => string | null;
+  private readonly getMediaCallbackUrl?: () => string | null;
   private readonly getMcpBridgeSecret?: () => string;
   private readonly getSkillsList?: () => Array<{ id: string; enabled: boolean }>;
   private readonly getAgents?: () => Agent[];
   private readonly getUserPlugins: () => Array<{ pluginId: string; enabled: boolean; config?: Record<string, unknown> }>;
+  private readonly getSubscriptionStatus: () => string;
   private previousBindingsJson?: string;
   private currentBindingsObj: { bindings?: Array<Record<string, unknown>> } = {};
 
@@ -1118,10 +1123,12 @@ export class OpenClawConfigSync {
     this.getIMSettings = deps.getIMSettings;
     this.getResolvedMcpServers = deps.getResolvedMcpServers;
     this.getAskUserCallbackUrl = deps.getAskUserCallbackUrl;
+    this.getMediaCallbackUrl = deps.getMediaCallbackUrl;
     this.getMcpBridgeSecret = deps.getMcpBridgeSecret;
     this.getSkillsList = deps.getSkillsList;
     this.getAgents = deps.getAgents;
     this.getUserPlugins = deps.getUserPlugins ?? (() => []);
+    this.getSubscriptionStatus = deps.getSubscriptionStatus ?? (() => 'free');
   }
 
   /**
@@ -1185,7 +1192,7 @@ export class OpenClawConfigSync {
     };
   }
 
-  private buildWebToolsConfig(browserWebAccess: BrowserWebAccessConfig): Record<string, unknown> {
+  private buildWebToolsConfig(browserWebAccess: BrowserWebAccessConfig, isSubscribed = false): Record<string, unknown> {
     const fetch = browserWebAccess.webFetch;
     const fetchConfig = {
       enabled: fetch.enabled,
@@ -1200,7 +1207,9 @@ export class OpenClawConfigSync {
     };
 
     return {
-      deny: [...MANAGED_TOOL_DENY],
+      deny: [...MANAGED_TOOL_DENY,
+        ...(isSubscribed ? ['image_generate', 'video_generate'] : []),],
+      
       web: {
         search: {
           enabled: false,
@@ -1384,6 +1393,7 @@ export class OpenClawConfigSync {
       preinstalledPlugins.some((plugin) => pluginMatches(plugin, ...ids))
     );
     const hasAskUserPlugin = isBundledPluginAvailable('ask-user-question');
+    const hasMediaGenPlugin = isBundledPluginAvailable('lobster-media-generation');
     const qwenPortalAuthPluginId = resolveOpenClawExtensionPluginId('qwen-portal-auth');
 
     // Detect if any provider uses Qwen/Aliyun DashScope URLs — OpenClaw auto-injects
@@ -1443,6 +1453,8 @@ export class OpenClawConfigSync {
     const bindingsChanged = this.previousBindingsJson !== undefined
       && bindingsJson !== this.previousBindingsJson;
     this.previousBindingsJson = bindingsJson;
+
+    const isSubscribed = this.getSubscriptionStatus() === 'active';
 
     const managedConfig: Record<string, unknown> = {
       gateway: {
@@ -1524,7 +1536,7 @@ export class OpenClawConfigSync {
       commands: {
         ownerAllowFrom: MANAGED_OWNER_ALLOW_FROM,
       },
-      tools: this.buildWebToolsConfig(browserWebAccess),
+      tools: this.buildWebToolsConfig(browserWebAccess, isSubscribed),
       browser: this.buildBrowserConfig(browserWebAccess),
       skills: {
         entries: {
@@ -1601,6 +1613,7 @@ export class OpenClawConfigSync {
             ? { feishu: { enabled: false } }
             : {}),
           ...(hasAskUserPlugin ? { 'ask-user-question': { enabled: true } } : {}),
+          ...(hasMediaGenPlugin ? { 'lobster-media-generation': { enabled: isSubscribed } } : {}),
           // Some OpenClaw versions auto-inject qwen-portal-auth for
           // Qwen/DashScope URLs. Declare it only when the plugin actually
           // exists, otherwise it becomes a stale entry on every startup.
@@ -1668,6 +1681,21 @@ export class OpenClawConfigSync {
         config: {
           callbackUrl: askUserCallbackUrl,
           secret: '${LOBSTER_MCP_BRIDGE_SECRET}',
+        },
+      };
+    }
+
+    // Sync LobsterMediaGeneration plugin config — uses media callback endpoint
+    const mediaCallbackUrl = this.getMediaCallbackUrl?.();
+    if (hasMediaGenPlugin && isSubscribed && mediaCallbackUrl && managedConfig.plugins) {
+      const plugins = managedConfig.plugins as Record<string, unknown>;
+      const entries = plugins.entries as Record<string, Record<string, unknown>>;
+      entries['lobster-media-generation'] = {
+        enabled: true,
+        config: {
+          callbackUrl: mediaCallbackUrl,
+          secret: '${LOBSTER_MCP_BRIDGE_SECRET}',
+          requestTimeoutMs: 120000,
         },
       };
     }

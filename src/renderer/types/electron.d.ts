@@ -446,6 +446,7 @@ interface IElectronAPI {
       activeSkillIds?: string[];
       agentId?: string;
       imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }>;
+      mediaSelection?: { mode: string; modelId?: string; modelName?: string; imageModelId?: string; videoModelId?: string };
     }) => Promise<{
       success: boolean;
       session?: CoworkSession;
@@ -459,6 +460,8 @@ interface IElectronAPI {
       systemPrompt?: string;
       activeSkillIds?: string[];
       imageAttachments?: Array<{ name: string; mimeType: string; base64Data: string }>;
+      mediaSelection?: { mode: string; modelId?: string; modelName?: string; imageModelId?: string; videoModelId?: string };
+      mediaReferences?: Array<{ token: string; mediaType: string; index: number; fileId: string; fileName: string; mimeType: string; localPath?: string; remoteUrl?: string; role?: string }>;
     }) => Promise<{
       success: boolean;
       session?: CoworkSession;
@@ -528,6 +531,7 @@ interface IElectronAPI {
       defaultFileName?: string;
       fileExtension?: string;
     }) => Promise<{ success: boolean; canceled?: boolean; path?: string; error?: string }>;
+    cancelMediaTask: (taskId: string) => Promise<{ success: boolean; message?: string }>;
     getSubTaskHistory: (options: {
       parentSessionId: string;
       agentId: string;
@@ -595,6 +599,9 @@ interface IElectronAPI {
     ) => () => void;
     onStreamMessageUpdate: (
       callback: (data: { sessionId: string; messageId: string; content: string; metadata?: Record<string, unknown> }) => void,
+    ) => () => void;
+    onMediaStatusPollUpdate?: (
+      callback: (data: { sessionId: string; toolCallId: string; details: Record<string, unknown> }) => void,
     ) => () => void;
     onStreamSessionStatus: (
       callback: (data: { sessionId: string; status: CoworkSessionStatus }) => void,
@@ -1015,6 +1022,10 @@ interface IElectronAPI {
     getProfileSummary: () => Promise<{ success: boolean; data?: ProfileSummaryData }>;
     onCallback: (callback: (data: { code: string }) => void) => () => void;
     onQuotaChanged: (callback: () => void) => () => void;
+  };
+  media: {
+    getModels: (type: 'image' | 'video') => Promise<{ success: boolean; models?: Array<{ modelId: string; displayName: string; provider: string; mediaType: string; generationTimeout: number; pricing: Record<string, unknown> }>; error?: string }>;
+    getTaskStatus: (taskId: number, type: 'image' | 'video') => Promise<{ success: boolean; task?: Record<string, unknown>; error?: string }>;
   };
   enterprise: {
     getConfig: () => Promise<{

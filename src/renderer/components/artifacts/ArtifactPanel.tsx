@@ -30,9 +30,9 @@ const t = (key: string) => i18nService.t(key);
 
 const BROWSER_OPENABLE_TYPES = new Set<ArtifactType>(['html', 'svg', 'mermaid']);
 
-const SYSTEM_OPENABLE_TYPES = new Set<ArtifactType>(['document']);
+const SYSTEM_OPENABLE_TYPES = new Set<ArtifactType>(['document', 'video']);
 
-const NON_CODE_TYPES = new Set<ArtifactType>(['document', 'image', 'text', ArtifactTypeValue.LocalService]);
+const NON_CODE_TYPES = new Set<ArtifactType>(['document', 'image', 'video', 'text', ArtifactTypeValue.LocalService]);
 
 const COPYABLE_IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg']);
 
@@ -40,7 +40,7 @@ const PANEL_CLOSE_DRAG_THRESHOLD = 48;
 const FILE_LIST_DRAWER_TRANSITION_MS = 180;
 
 function isCopyableArtifact(artifact: Artifact): boolean {
-  if (artifact.type === 'document') return false;
+  if (artifact.type === 'document' || artifact.type === 'video') return false;
   if (artifact.type === ArtifactTypeValue.LocalService) return false;
   if (artifact.type === 'image') {
     const filename = artifact.fileName || artifact.filePath || '';
@@ -484,6 +484,13 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
 
   const handleRefresh = useCallback(async () => {
     if (!selectedArtifact?.filePath) return;
+    if (selectedArtifact.type === 'video') {
+      dispatch(addArtifact({
+        sessionId: selectedArtifact.sessionId,
+        artifact: { ...selectedArtifact, createdAt: Date.now() },
+      }));
+      return;
+    }
     try {
       if (selectedArtifact.type === ArtifactTypeValue.Html) {
         dispatch(addArtifact({
@@ -510,6 +517,8 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
 
       const result = await window.electron.dialog.readFileAsDataUrl(selectedArtifact.filePath);
       if (result?.success && result.dataUrl) {
+        const isTextType = selectedArtifact.type !== 'image'
+          && selectedArtifact.type !== 'document';
         let content = result.dataUrl;
         if (isTextType) {
           try {

@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
 
+import { dedupeArtifactsForDisplay } from '@/services/artifactParser';
 import { i18nService } from '@/services/i18n';
 import type { Artifact, ArtifactType } from '@/types/artifact';
 
@@ -11,18 +12,20 @@ const TYPE_ORDER: Record<ArtifactType, number> = {
   html: 0,
   svg: 1,
   image: 2,
-  mermaid: 3,
-  document: 4,
-  markdown: 5,
-  text: 6,
-  code: 7,
-  'local-service': 8,
+  video: 3,
+  mermaid: 4,
+  document: 5,
+  markdown: 6,
+  text: 7,
+  code: 8,
+  'local-service': 9,
 };
 
 const TYPE_LABEL_KEYS: Record<ArtifactType, string> = {
   html: 'artifactTypeHtml',
   svg: 'artifactTypeSvg',
   image: 'artifactTypeImage',
+  video: 'artifactTypeVideo',
   mermaid: 'artifactTypeMermaid',
   document: 'artifactTypeDocument',
   markdown: 'artifactTypeMarkdown',
@@ -49,7 +52,7 @@ const FileDirectoryView: React.FC<FileDirectoryViewProps> = ({ artifacts, select
   const [search, setSearch] = useState('');
 
   const sortedAndFiltered = useMemo(() => {
-    let items = artifacts;
+    let items = dedupeArtifactsForDisplay(artifacts);
 
     if (search.trim()) {
       const keyword = search.trim().toLowerCase();

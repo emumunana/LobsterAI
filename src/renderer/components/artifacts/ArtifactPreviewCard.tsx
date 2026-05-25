@@ -69,6 +69,13 @@ const DocumentIcon: React.FC<{ className?: string }> = ({ className }) => (
   </svg>
 );
 
+const VideoIcon: React.FC<{ className?: string }> = ({ className }) => (
+  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="2" y="4" width="20" height="16" rx="2" />
+    <polygon points="10 9 16 12 10 15" />
+  </svg>
+);
+
 const AppIcon: React.FC<{ className?: string }> = ({ className }) => (
   <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
     <rect x="3" y="3" width="18" height="18" rx="4" />
@@ -81,6 +88,7 @@ const TYPE_ICON_MAP: Record<ArtifactType, React.FC<{ className?: string }>> = {
   html: GlobeIcon,
   svg: SvgIcon,
   image: ImageIcon,
+  video: VideoIcon,
   mermaid: MermaidIcon,
   code: GlobeIcon,
   markdown: MarkdownIcon,
@@ -95,6 +103,7 @@ const TYPE_LABEL_KEY: Record<ArtifactType, string> = {
   html: 'artifactTypeHtml',
   svg: 'artifactTypeSvg',
   image: 'artifactTypeImage',
+  video: 'artifactTypeVideo',
   mermaid: 'artifactTypeMermaid',
   code: 'artifactTypeHtml',
   markdown: 'artifactTypeMarkdown',

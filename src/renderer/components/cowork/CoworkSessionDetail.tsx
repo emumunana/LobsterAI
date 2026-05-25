@@ -6,7 +6,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo,useRef, useStat
 import { createPortal } from 'react-dom';
 import { useDispatch, useSelector } from 'react-redux';
 
-import { normalizeFilePathForDedup, normalizeLocalServiceUrlForDedup, parseFileLinksFromMessage, parseFilePathsFromText, parseLocalServiceUrlsFromText, parseMediaTokensFromText, parseToolArtifact, stripFileLinksFromText } from '../../services/artifactParser';
+import { normalizeFilePathForDedup, normalizeLocalServiceUrlForDedup, parseFileLinksFromMessage, parseFilePathsFromText, parseLocalServiceUrlsFromText, parseMediaTokensFromText, parseRemoteImageArtifactsFromText, parseToolArtifact, parseToolResultMediaArtifacts, stripFileLinksFromText } from '../../services/artifactParser';
 import { coworkService } from '../../services/cowork';
 import { i18nService } from '../../services/i18n';
 import { RootState } from '../../store';
@@ -39,6 +39,7 @@ import type { Artifact } from '../../types/artifact';
 import { ArtifactTypeValue, PREVIEWABLE_ARTIFACT_TYPES } from '../../types/artifact';
 import type { CoworkImageAttachment,CoworkMessage, CoworkMessageMetadata } from '../../types/cowork';
 import { CoworkSessionStatusValue } from '../../types/cowork';
+import type { MediaAttachmentRef } from '../../types/mediaGeneration';
 import { ArtifactPanel, type BrowserAnnotationPayload } from '../artifacts';
 import ComposeIcon from '../icons/ComposeIcon';
 import FileTypeIcon from '../icons/fileTypes/FileTypeIcon';
@@ -59,7 +60,7 @@ import {
 import UserMessageItem from './UserMessageItem';
 interface CoworkSessionDetailProps {
   onManageSkills?: () => void;
-  onContinue: (prompt: string, skillPrompt?: string, imageAttachments?: CoworkImageAttachment[]) => boolean | void | Promise<boolean | void>;
+  onContinue: (prompt: string, skillPrompt?: string, imageAttachments?: CoworkImageAttachment[], mediaReferences?: MediaAttachmentRef[]) => boolean | void | Promise<boolean | void>;
   onStop: () => void;
   isSidebarCollapsed?: boolean;
   onToggleSidebar?: () => void;
@@ -1108,6 +1109,13 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       const detected: Artifact[] = [];
       const seenFilePaths = new Set<string>();
       const seenLocalServiceUrls = new Set<string>();
+      const rememberArtifactFilePaths = (artifacts: Artifact[]) => {
+        for (const artifact of artifacts) {
+          if (artifact.filePath) {
+            seenFilePaths.add(normalizeFilePathForDedup(artifact.filePath));
+          }
+        }
+      };
 
       for (const msg of messages) {
         if (msg.type === 'assistant' && !msg.metadata?.isThinking && msg.content) {
@@ -1139,9 +1147,20 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
               detected.push(pa);
             }
           }
+
+          detected.push(...parseRemoteImageArtifactsFromText(msg.content, msg.id, sessionId, 'artifact-remote-assistant'));
         }
 
-        if (msg.type === 'tool_result' && msg.content) {
+        if (msg.type === 'tool_result') {
+          const toolMediaArtifacts = parseToolResultMediaArtifacts(msg, sessionId);
+          if (toolMediaArtifacts.length > 0) {
+            detected.push(...toolMediaArtifacts);
+            rememberArtifactFilePaths(toolMediaArtifacts);
+            continue;
+          }
+
+          if (!msg.content) continue;
+
           const mediaArtifacts = parseMediaTokensFromText(msg.content, msg.id, sessionId);
           for (const ma of mediaArtifacts) {
             const normalized = ma.filePath ? normalizeFilePathForDedup(ma.filePath) : '';
@@ -1150,6 +1169,47 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
               detected.push(ma);
             }
           }
+          const pathArtifacts = parseFilePathsFromText(msg.content, msg.id, sessionId, 'artifact-toolresult');
+          for (const pa of pathArtifacts) {
+            const normalized = pa.filePath ? normalizeFilePathForDedup(pa.filePath) : '';
+            if (pa.filePath && !seenFilePaths.has(normalized)) {
+              seenFilePaths.add(normalized);
+              detected.push(pa);
+            }
+          }
+          detected.push(...parseRemoteImageArtifactsFromText(msg.content, msg.id, sessionId, 'artifact-remote-toolresult'));
+        }
+
+        if (msg.type === 'system') {
+          const toolMediaArtifacts = parseToolResultMediaArtifacts(msg, sessionId);
+          if (toolMediaArtifacts.length > 0) {
+            detected.push(...toolMediaArtifacts);
+            rememberArtifactFilePaths(toolMediaArtifacts);
+            continue;
+          }
+
+          if (!msg.content) continue;
+
+          const fileLinks = parseFileLinksFromMessage(msg.content, msg.id, sessionId);
+          for (const fl of fileLinks) {
+            const normalized = fl.filePath ? normalizeFilePathForDedup(fl.filePath) : '';
+            if (fl.filePath && !seenFilePaths.has(normalized)) {
+              seenFilePaths.add(normalized);
+              detected.push(fl);
+            }
+          }
+
+          const contentWithoutFileLinks = stripFileLinksFromText(msg.content);
+          const pathArtifacts = parseFilePathsFromText(contentWithoutFileLinks, msg.id, sessionId, 'artifact-system-path');
+          for (const pa of pathArtifacts) {
+            const normalized = pa.filePath ? normalizeFilePathForDedup(pa.filePath) : '';
+            if (pa.filePath && !seenFilePaths.has(normalized)) {
+              seenFilePaths.add(normalized);
+              detected.push(pa);
+            }
+          }
+
+          detected.push(...parseRemoteImageArtifactsFromText(msg.content, msg.id, sessionId, 'artifact-remote-system'));
         }
       }
 
@@ -1198,6 +1258,14 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
           const absPath = rawPath.startsWith('/')
             ? rawPath
             : (/^[A-Za-z]:/.test(rawPath) ? rawPath : `${cwd}/${rawPath}`);
+          if (artifact.type === 'video') {
+            loadedFileIdsRef.current.add(artifact.id);
+            dispatch(addArtifact({
+              sessionId,
+              artifact: { ...artifact, content: '', filePath: absPath },
+            }));
+            continue;
+          }
           if (artifact.type === ArtifactTypeValue.Html) {
             try {
               const stat = await window.electron.dialog.statFile(absPath);

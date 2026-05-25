@@ -32,6 +32,7 @@ import {
   updateSessionPinned,
   updateSessionStatus,
   updateSessionTitle,
+  updateToolUseMediaStatus,
 } from '../store/slices/coworkSlice';
 import { clearActiveSkills, setActiveSkillIds } from '../store/slices/skillSlice';
 import type {
@@ -158,6 +159,17 @@ class CoworkService {
       store.dispatch(updateMessageContent({ sessionId, messageId, content, metadata }));
     });
     this.streamListenerCleanups.push(messageUpdateCleanup);
+
+    const mediaStatusPollCleanup = cowork.onMediaStatusPollUpdate?.(({ sessionId, toolCallId, details }) => {
+      const session = store.getState().cowork.sessions.find(s => s.id === sessionId);
+      if (session?.status !== 'completed') {
+        store.dispatch(updateSessionStatus({ sessionId, status: 'running' }));
+      }
+      store.dispatch(updateToolUseMediaStatus({ sessionId, toolCallId, details }));
+    });
+    if (mediaStatusPollCleanup) {
+      this.streamListenerCleanups.push(mediaStatusPollCleanup);
+    }
 
     const sessionStatusCleanup = cowork.onStreamSessionStatus?.(({ sessionId, status }) => {
       store.dispatch(updateSessionStatus({ sessionId, status }));
@@ -571,6 +583,8 @@ class CoworkService {
       systemPrompt: options.systemPrompt,
       activeSkillIds: options.activeSkillIds,
       imageAttachments: options.imageAttachments,
+      mediaSelection: options.mediaSelection,
+      mediaReferences: options.mediaReferences,
     });
     if (!result.success) {
       store.dispatch(setStreaming(false));

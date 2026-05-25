@@ -16,7 +16,7 @@ import {
   ContextCompactionStatus,
   CoworkSystemMessageKind,
 } from '../../../common/coworkSystemMessages';
-import { OpenClawRuntimeAdapter, pickPersistedAssistantSegment } from './openclawRuntimeAdapter';
+import { OpenClawRuntimeAdapter, pickPersistedAssistantSegment, resolveToolEventIsError } from './openclawRuntimeAdapter';
 
 test('pickPersistedAssistantSegment: stream authority keeps previous when same length or longer', () => {
   expect(pickPersistedAssistantSegment('aa', 'a', true)).toEqual({
@@ -180,6 +180,12 @@ test('usage metadata falls back to latest assistant when preferred id was replac
     model: 'qwen-portal/qwen3.6-plus',
     agentName: 'main',
   });
+});
+
+test('resolveToolEventIsError reads nested tool result errors', () => {
+  expect(resolveToolEventIsError({ isError: true })).toBe(true);
+  expect(resolveToolEventIsError({ isError: false, result: { isError: true } })).toBe(true);
+  expect(resolveToolEventIsError({ isError: false, result: { isError: false } })).toBe(false);
 });
 
 // ==================== Session patch tests ====================
@@ -581,6 +587,9 @@ function createActiveTurn(sessionId: string, sessionKey: string, runId: string) 
     toolUseMessageIdByToolCallId: new Map(),
     toolResultMessageIdByToolCallId: new Map(),
     toolResultTextByToolCallId: new Map(),
+    mediaStatusPollCountByToolCallId: new Map(),
+    mediaStatusPollCountByTaskId: new Map(),
+    mediaStatusPollBaseByToolCallId: new Map(),
     contextMaintenanceToolCallIds: new Set(),
     stopRequested: false,
     pendingUserSync: false,
@@ -835,6 +844,9 @@ test('lifecycle fallback repairs managed session assistant text from history', a
     toolUseMessageIdByToolCallId: new Map(),
     toolResultMessageIdByToolCallId: new Map(),
     toolResultTextByToolCallId: new Map(),
+    mediaStatusPollCountByToolCallId: new Map(),
+    mediaStatusPollCountByTaskId: new Map(),
+    mediaStatusPollBaseByToolCallId: new Map(),
     contextMaintenanceToolCallIds: new Set(),
     stopRequested: false,
     pendingUserSync: false,

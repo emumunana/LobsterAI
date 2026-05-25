@@ -6,10 +6,111 @@ import type { CoworkMessage } from '../types/cowork';
  * Handles Windows file:// URL leading slash and backslash differences.
  */
 export function normalizeFilePathForDedup(p: string): string {
+  let normalized = p.trim();
+  if (normalized.startsWith('file:///')) {
+    normalized = normalized.slice(7);
+  } else if (normalized.startsWith('file://')) {
+    normalized = normalized.slice(7);
+  } else if (normalized.startsWith('file:/')) {
+    normalized = normalized.slice(5);
+  }
+  const queryIndex = normalized.search(/[?#]/);
+  if (queryIndex >= 0) {
+    normalized = normalized.slice(0, queryIndex);
+  }
+  try {
+    normalized = decodeURIComponent(normalized);
+  } catch {
+    // Keep the original value if it contains a literal percent sign.
+  }
   // Strip leading / before drive letter (e.g. /D:/path from file:///D:/path)
-  if (/^\/[A-Za-z]:/.test(p)) p = p.slice(1);
+  if (/^\/[A-Za-z]:/.test(normalized)) normalized = normalized.slice(1);
   // Unify separators and case for comparison
-  return p.replace(/\\/g, '/').toLowerCase();
+  return normalized.replace(/\\/g, '/').toLowerCase();
+}
+
+const getArtifactIdentityKeys = (artifact: Artifact): string[] => {
+  const keys: string[] = [];
+  if (artifact.filePath) {
+    keys.push(`file:${artifact.type}:${normalizeFilePathForDedup(artifact.filePath)}`);
+  }
+  const remoteUrl = artifact.remoteUrl?.trim();
+  if (remoteUrl) {
+    keys.push(`url:${artifact.type}:${remoteUrl}`);
+  }
+  if ((artifact.type === 'image' || artifact.type === 'video') && artifact.content?.trim()) {
+    keys.push(`url:${artifact.type}:${artifact.content.trim()}`);
+  }
+  const fileName = artifact.fileName?.trim() || artifact.title?.trim();
+  if (artifact.type === 'video' && fileName) {
+    keys.push(`name:${artifact.type}:${fileName.toLowerCase()}`);
+  }
+  return keys;
+};
+
+const shouldPreferArtifact = (candidate: Artifact, current: Artifact): boolean => {
+  const currentHasFileProtocol = Boolean(current.filePath && /^file:/i.test(current.filePath));
+  const candidateHasFileProtocol = Boolean(candidate.filePath && /^file:/i.test(candidate.filePath));
+  if (current.filePath && !candidate.filePath) return false;
+  if (!current.filePath && candidate.filePath) return true;
+  if (currentHasFileProtocol && candidate.filePath && !candidateHasFileProtocol) return true;
+  if (!currentHasFileProtocol && current.filePath && candidateHasFileProtocol) return false;
+  if (!current.remoteUrl && candidate.remoteUrl) return true;
+  if (!current.content && candidate.content) return true;
+  return false;
+};
+
+export function dedupeArtifactsForDisplay(artifacts: Artifact[]): Artifact[] {
+  const result: Artifact[] = [];
+  const keyToIndex = new Map<string, number>();
+
+  for (const artifact of artifacts) {
+    const keys = getArtifactIdentityKeys(artifact);
+    const existingIndex = keys
+      .map(key => keyToIndex.get(key))
+      .find((index): index is number => index !== undefined);
+
+    if (existingIndex === undefined) {
+      const nextIndex = result.length;
+      result.push(artifact);
+      for (const key of keys) {
+        keyToIndex.set(key, nextIndex);
+      }
+      continue;
+    }
+
+    if (shouldPreferArtifact(artifact, result[existingIndex])) {
+      result[existingIndex] = artifact;
+    }
+    for (const key of keys) {
+      keyToIndex.set(key, existingIndex);
+    }
+  }
+
+  return result;
+}
+
+export function hasToolResultMediaAssets(toolResultMsg: CoworkMessage | undefined): boolean {
+  if (!toolResultMsg?.metadata || toolResultMsg.metadata.isError) return false;
+
+  const details = toolResultMsg.metadata.toolResultDetails;
+  if (!details || typeof details !== 'object' || Array.isArray(details)) return false;
+
+  const assets = (details as Record<string, unknown>).assets;
+  if (!Array.isArray(assets)) return false;
+
+  return assets.some(asset => {
+    if (!asset || typeof asset !== 'object' || Array.isArray(asset)) return false;
+    const item = asset as Record<string, unknown>;
+    if (item.type !== 'image' && item.type !== 'video') return false;
+    const url = typeof item.url === 'string' ? item.url.trim() : '';
+    const filePath = typeof item.filePath === 'string' ? item.filePath.trim() : '';
+    const localPath = typeof item.localPath === 'string' ? item.localPath.trim() : '';
+    if (item.type === 'video') {
+      return Boolean(filePath || localPath);
+    }
+    return Boolean(url || filePath || localPath);
+  });
 }
 
 const EXTENSION_TO_ARTIFACT_TYPE: Record<string, ArtifactType> = {
@@ -21,6 +122,11 @@ const EXTENSION_TO_ARTIFACT_TYPE: Record<string, ArtifactType> = {
   '.jpeg': 'image',
   '.gif': 'image',
   '.webp': 'image',
+  '.bmp': 'image',
+  '.avif': 'image',
+  '.mp4': 'video',
+  '.webm': 'video',
+  '.mov': 'video',
   '.mermaid': 'mermaid',
   '.mmd': 'mermaid',
   '.jsx': 'code',
@@ -38,11 +144,13 @@ const EXTENSION_TO_ARTIFACT_TYPE: Record<string, ArtifactType> = {
   '.pdf': 'document',
 };
 
-const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp']);
+const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.avif']);
+const VIDEO_EXTENSIONS = new Set(['.mp4', '.webm', '.mov']);
 const BINARY_DOCUMENT_EXTENSIONS = new Set(['.docx', '.xlsx', '.pptx', '.pdf', '.csv', '.tsv', '.xls']);
 const LOCAL_SERVICE_URL_RE = /\bhttps?:\/\/(?:localhost|127(?:\.\d{1,3}){3}|0\.0\.0\.0|\[::1\])(?::\d{1,5})?(?:\/[^\s<>"'`)\]]*)?/gi;
 const MARKDOWN_LINK_RE = /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/gi;
 const LOCAL_SERVICE_TRAILING_PUNCTUATION_RE = /[.,;:!?，。；：！？、]+$/;
+
 
 export function getArtifactTypeFromExtension(ext: string): ArtifactType | null {
   return EXTENSION_TO_ARTIFACT_TYPE[ext.toLowerCase()] ?? null;
@@ -50,6 +158,10 @@ export function getArtifactTypeFromExtension(ext: string): ArtifactType | null {
 
 export function isImageExtension(ext: string): boolean {
   return IMAGE_EXTENSIONS.has(ext.toLowerCase());
+}
+
+export function isVideoExtension(ext: string): boolean {
+  return VIDEO_EXTENSIONS.has(ext.toLowerCase());
 }
 
 export function isBinaryDocumentExtension(ext: string): boolean {
@@ -209,12 +321,14 @@ export function parseMediaTokensFromText(
 }
 
 const FILE_LINK_RE = /\[([^\]]+)\]\(file:\/\/([^)]+)\)/g;
+const REMOTE_MARKDOWN_IMAGE_RE = /!\[([^\]]*)\]\((https?:\/\/[^)\s]+)\)/g;
+const REMOTE_IMAGE_URL_RE = /(?:^|[\s<("'`])(https?:\/\/[^\s<>"'`)]*\.(?:png|jpe?g|gif|webp|bmp|avif)(?:\?[^\s<>"'`)]*)?)(?:[\s>)"'`]|$)/gi;
 
 export function stripFileLinksFromText(text: string): string {
   return text.replace(/\[([^\]]+)\]\(file:\/\/([^)]+)\)/g, '');
 }
 
-const BARE_FILE_PATH_RE = /(?:^|[\s"'`(])(\/?(?:[^\s"'`()\[\]]+\/)*[^\s"'`()\[\]]+\.(?:docx|xlsx|pptx|pdf|md|txt|log|csv))(?:[\s"'`)]|$)/gm;
+const BARE_FILE_PATH_RE = /(?:^|[\s"'`(])(\/?(?:[^\s"'`()\[\]]+\/)+[^\s"'`()\[\]]+\.(?:png|jpe?g|gif|webp|bmp|avif|mp4|webm|mov|docx|xlsx|pptx|pdf|md|txt|log|csv))(?:[\s"'`)]|$)/gm;
 
 export function parseFilePathsFromText(
   messageContent: string,
@@ -317,6 +431,105 @@ export function parseFileLinksFromMessage(
   return artifacts;
 }
 
+export function parseRemoteImageArtifactsFromText(
+  messageContent: string,
+  messageId: string,
+  sessionId: string,
+  idPrefix = 'artifact-remote-image',
+): Artifact[] {
+  if (!messageContent) return [];
+
+  const artifacts: Artifact[] = [];
+  const seen = new Set<string>();
+  let index = 0;
+
+  const pushImage = (url: string, title?: string) => {
+    const trimmedUrl = url.trim();
+    if (!trimmedUrl || seen.has(trimmedUrl)) return;
+    seen.add(trimmedUrl);
+    artifacts.push({
+      id: `${idPrefix}-${messageId}-${index++}`,
+      messageId,
+      sessionId,
+      type: 'image',
+      title: title?.trim() || `Generated image ${index}`,
+      content: trimmedUrl,
+      fileName: title?.trim() || `generated-image-${index}`,
+      source: 'tool',
+      createdAt: Date.now(),
+    });
+  };
+
+  const markdownRe = new RegExp(REMOTE_MARKDOWN_IMAGE_RE.source, 'g');
+  let markdownMatch: RegExpExecArray | null;
+  while ((markdownMatch = markdownRe.exec(messageContent)) !== null) {
+    pushImage(markdownMatch[2], markdownMatch[1]);
+  }
+
+  const bareUrlRe = new RegExp(REMOTE_IMAGE_URL_RE.source, 'gi');
+  let urlMatch: RegExpExecArray | null;
+  while ((urlMatch = bareUrlRe.exec(messageContent)) !== null) {
+    pushImage(urlMatch[1]);
+  }
+
+  return artifacts;
+}
+
+export function parseToolResultMediaArtifacts(
+  toolResultMsg: CoworkMessage | undefined,
+  sessionId: string,
+): Artifact[] {
+  if (!toolResultMsg?.metadata || toolResultMsg.metadata.isError) return [];
+
+  const details = toolResultMsg.metadata.toolResultDetails;
+  if (!details || typeof details !== 'object' || Array.isArray(details)) return [];
+
+  const assets = (details as Record<string, unknown>).assets;
+  if (!Array.isArray(assets)) return [];
+
+  const artifacts: Artifact[] = [];
+  for (let index = 0; index < assets.length; index++) {
+    const asset = assets[index];
+    if (!asset || typeof asset !== 'object' || Array.isArray(asset)) continue;
+    const item = asset as Record<string, unknown>;
+    if (item.type !== 'image' && item.type !== 'video') continue;
+    const artifactType: ArtifactType = item.type === 'video' ? 'video' : 'image';
+
+    const url = typeof item.url === 'string' && item.url.trim()
+      ? item.url.trim()
+      : '';
+    const filePath = typeof item.filePath === 'string' && item.filePath.trim()
+      ? item.filePath.trim()
+      : typeof item.localPath === 'string' && item.localPath.trim()
+        ? item.localPath.trim()
+        : '';
+    if (artifactType === 'video' && !filePath) continue;
+    if (!url && !filePath) continue;
+
+    const filename = typeof item.filename === 'string' && item.filename.trim()
+      ? item.filename.trim()
+      : filePath
+        ? getFileName(filePath)
+        : `generated-${artifactType}-${index + 1}`;
+
+    artifacts.push({
+      id: `artifact-media-${toolResultMsg.id}-${index}`,
+      messageId: toolResultMsg.id,
+      sessionId,
+      type: artifactType,
+      title: filename,
+      content: filePath ? '' : url,
+      fileName: filename,
+      ...(filePath ? { filePath } : {}),
+      ...(filePath && url ? { remoteUrl: url } : {}),
+      source: 'tool',
+      createdAt: toolResultMsg.timestamp || Date.now(),
+    });
+  }
+
+  return artifacts;
+}
+
 const WRITE_TOOL_NAMES = new Set(['write', 'writefile', 'write_file']);
 
 function normalizeToolName(name: string): string {
@@ -370,8 +583,9 @@ export function parseToolArtifact(
 
   const fileName = getFileName(filePath);
   const isImage = isImageExtension(ext);
+  const isVideo = isVideoExtension(ext);
   const isBinaryDoc = isBinaryDocumentExtension(ext);
-  const content = (isImage || isBinaryDoc) ? '' : (typeof toolInput.content === 'string' ? toolInput.content : '');
+  const content = (isImage || isVideo || isBinaryDoc) ? '' : (typeof toolInput.content === 'string' ? toolInput.content : '');
 
   return {
     id: `artifact-tool-${toolUseMsg.id}`,

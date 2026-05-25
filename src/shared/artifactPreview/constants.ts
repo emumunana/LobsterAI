@@ -8,6 +8,12 @@ export const ArtifactPreviewIpc = {
 
 export type ArtifactPreviewIpc = typeof ArtifactPreviewIpc[keyof typeof ArtifactPreviewIpc];
 
+export const ArtifactPreviewProtocol = {
+  LocalFile: 'localfile',
+} as const;
+
+export type ArtifactPreviewProtocol = typeof ArtifactPreviewProtocol[keyof typeof ArtifactPreviewProtocol];
+
 export const ArtifactBrowserPartition = {
   Default: 'persist:lobster-artifact-browser',
 } as const;
