@@ -238,7 +238,10 @@ export class PluginManager {
 
   async listPlugins(): Promise<PluginListItem[]> {
     const userPlugins = this.store.listUserPlugins();
-    const extensionsDir = getExtensionsDir();
+    const dirsToSearch = [
+      getExtensionsDir(),
+      getOpenClawStateExtensionsDir(),
+    ].filter((d): d is string => d !== null);
 
     const items: PluginListItem[] = [];
 
@@ -247,8 +250,8 @@ export class PluginManager {
       let version = plugin.version;
       let hasConfig = false;
 
-      if (extensionsDir) {
-        const pluginDir = path.join(extensionsDir, plugin.pluginId);
+      for (const dir of dirsToSearch) {
+        const pluginDir = path.join(dir, plugin.pluginId);
         const manifest = readPluginManifest(pluginDir);
         if (manifest) {
           description = manifest.description || manifest.name;
@@ -256,9 +259,10 @@ export class PluginManager {
             && typeof manifest.configSchema === 'object'
             && (manifest.configSchema as Record<string, unknown>).properties
             && Object.keys((manifest.configSchema as Record<string, unknown>).properties as object).length > 0);
-        }
-        if (!version) {
-          version = readPluginVersion(pluginDir);
+          if (!version) {
+            version = readPluginVersion(pluginDir);
+          }
+          break;
         }
       }
 
@@ -431,24 +435,32 @@ export class PluginManager {
   }
 
   getPluginConfigSchema(pluginId: string): PluginConfigSchema | null {
-    const extensionsDir = getExtensionsDir();
-    if (!extensionsDir) return null;
+    const dirsToSearch = [
+      getExtensionsDir(),
+      getOpenClawStateExtensionsDir(),
+    ].filter((d): d is string => d !== null);
+    if (dirsToSearch.length === 0) return null;
 
-    const pluginDir = path.join(extensionsDir, pluginId);
-    const manifest = readPluginManifest(pluginDir);
-    const schemaProps = (manifest?.configSchema as Record<string, unknown> | undefined)?.properties;
-    if (!schemaProps || Object.keys(schemaProps as object).length === 0) {
-      return null;
+    for (const dir of dirsToSearch) {
+      const pluginDir = path.join(dir, pluginId);
+      const manifest = readPluginManifest(pluginDir);
+      if (!manifest) continue;
+      const schemaProps = (manifest.configSchema as Record<string, unknown> | undefined)?.properties;
+      if (!schemaProps || Object.keys(schemaProps as object).length === 0) {
+        continue;
+      }
+
+      const uiHints = manifest.uiHints ?? {};
+      // Auto-generate uiHints from configSchema properties when not provided
+      const mergedHints = generateHintsFromSchema(manifest.configSchema!, uiHints);
+
+      return {
+        configSchema: manifest.configSchema!,
+        uiHints: mergedHints,
+      };
     }
 
-    const uiHints = manifest.uiHints ?? {};
-    // Auto-generate uiHints from configSchema properties when not provided
-    const mergedHints = generateHintsFromSchema(manifest.configSchema, uiHints);
-
-    return {
-      configSchema: manifest.configSchema,
-      uiHints: mergedHints,
-    };
+    return null;
   }
 
   getPluginConfig(pluginId: string): Record<string, unknown> | null {
@@ -670,7 +682,7 @@ export class PluginManager {
           if (isHiddenPlugin(pluginId, hiddenIds)) continue;
           if (syncedIds.has(pluginId)) continue;
 
-          const configEntry = configEntries[pluginId] as { enabled?: boolean } | undefined;
+          const configEntry = configEntries[pluginId] as { enabled?: boolean; config?: Record<string, unknown> } | undefined;
           const enabled = configEntry?.enabled !== false;
           const version = readPluginVersion(pluginDir);
 
@@ -682,6 +694,12 @@ export class PluginManager {
             enabled,
             installedAt: Date.now(),
           });
+
+          // Sync config values from openclaw.json if present
+          if (configEntry?.config && typeof configEntry.config === 'object'
+            && Object.keys(configEntry.config).length > 0) {
+            this.store.setUserPluginConfig(pluginId, configEntry.config);
+          }
 
           synced.push(pluginId);
           syncedIds.add(pluginId);
@@ -697,7 +715,7 @@ export class PluginManager {
       if (isHiddenPlugin(pluginId, hiddenIds)) continue;
       if (syncedIds.has(pluginId)) continue;
 
-      const configEntry = configEntries[pluginId] as { enabled?: boolean } | undefined;
+      const configEntry = configEntries[pluginId] as { enabled?: boolean; config?: Record<string, unknown> } | undefined;
       const enabled = configEntry?.enabled !== false;
 
       this.store.addUserPlugin({
@@ -708,6 +726,12 @@ export class PluginManager {
         enabled,
         installedAt: Date.now(),
       });
+
+      // Sync config values from openclaw.json if present
+      if (configEntry?.config && typeof configEntry.config === 'object'
+        && Object.keys(configEntry.config).length > 0) {
+        this.store.setUserPluginConfig(pluginId, configEntry.config);
+      }
 
       synced.push(pluginId);
       syncedIds.add(pluginId);

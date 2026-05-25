@@ -134,12 +134,12 @@ export default function PluginsSettings() {
     setInstallLog('');
 
     const params: {
-      source: PluginSource;
+      source: 'npm' | 'clawhub' | 'git' | 'local';
       spec: string;
       registry?: string;
       version?: string;
     } = {
-      source: form.source,
+      source: form.source as 'npm' | 'clawhub' | 'git' | 'local',
       spec: form.spec.trim(),
     };
 
