@@ -2264,13 +2264,6 @@ const emitMediaStatusPollUpdate = (update: MediaStatusPollUpdate): void => {
   });
 };
 
-const stopMediaPollTimer = () => {
-  if (mediaTaskPollTimer) {
-    clearInterval(mediaTaskPollTimer);
-    mediaTaskPollTimer = null;
-  }
-};
-
 const getTitleBarOverlayOptions = () => {
   const config = getStore().get<AppConfigSettings>('app_config');
   const theme = resolveThemeFromConfig(config);
