@@ -32,9 +32,22 @@ export function registerSkillHandlers(deps: SkillHandlerDeps): void {
     }
   });
 
-  ipcMain.handle('skills:setEnabled', (_event, options: { id: string; enabled: boolean }) => {
+  ipcMain.handle('skills:setEnabled', async (_event, options: { id: string; enabled: boolean }) => {
     try {
       const skills = getSkillManager().setSkillEnabled(options.id, options.enabled);
+      // Best-effort sync to OpenClaw
+      try {
+        const adapter = getOpenClawRuntimeAdapter();
+        if (adapter) {
+          await adapter.connectGatewayIfNeeded();
+          const client = adapter.getGatewayClient();
+          if (client) {
+            await client.request('skills.update', { skillKey: options.id, enabled: options.enabled }, { timeoutMs: 10_000 });
+          }
+        }
+      } catch (ocError) {
+        console.warn('[skills] Failed to sync enabled state to OpenClaw:', ocError);
+      }
       return { success: true, skills };
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : 'Failed to update skill' };
