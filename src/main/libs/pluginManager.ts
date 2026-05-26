@@ -733,18 +733,50 @@ export class PluginManager {
 
 /** Plugins that should never appear in the user-managed plugin list. */
 const INTERNAL_PLUGIN_IDS = [
+  // Core internal plugins
   'ask-user-question',
   'memory-core',
   'qwen-portal-auth',
   'qqbot',
   'acpx',
-  'minimax',
   'browser',
-  'qwen',
-  'zai',
-  'qianfan',
-  'volcengine',
+
+  // Provider plugins auto-injected by OpenClaw runtime — not user-installable.
+  // Keep in sync with OpenClawProviderId in src/shared/providers/constants.ts.
+  'google',
+  'anthropic',
+  'openai',
+  'openai-codex',
   'deepseek',
+  'moonshot',
+  'minimax',
+  'volcengine',
+  'qianfan',
+  'qwen',
+  'qwen-portal',
+  'zai',
+  'youdaozhiyun',
+  'stepfun',
+  'xiaomi',
+  'openrouter',
+  'ollama',
+  'lm-studio',
+  'lobsterai-server',
+  'github-copilot',
+  'lobsterai-copilot',
+  'lobster',
+
+  // Aliases / legacy IDs for preinstalled channel plugins.
+  // The canonical IDs are in package.json openclaw.plugins and get hidden
+  // via readPreinstalledPluginIdsFromPackageJson(); these are alt names that
+  // may appear in openclaw.json entries on some installations.
+  'dingtalk',
+  'feishu',
+  'feishu-openclaw-plugin',
+  'openclaw-nim',
+  'nim',
+  'nimsuite-openclaw-nim-channel',
+  'email',
 ];
 
 /** Read preinstalled plugin IDs from package.json openclaw.plugins field. */
