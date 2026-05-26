@@ -1286,6 +1286,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   private static readonly TOOL_USE_FINAL_LIFECYCLE_END_GRACE_MS = 45_000;
   private static readonly SILENT_MAINTENANCE_FOLLOWUP_GRACE_MS = 60_000;
   private static readonly VISIBLE_FINAL_CONTINUATION_GRACE_MS = 120_000;
+  private static readonly VISIBLE_FINAL_LARGE_TOOL_CONFIRMATION_GRACE_MS = 8_000;
   private static readonly VISIBLE_FINAL_TOOL_RESULT_CHAR_THRESHOLD = 20_000;
   private static readonly VISIBLE_FINAL_SHORT_TEXT_CHAR_THRESHOLD = 600;
 
@@ -1467,36 +1468,62 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     turn: ActiveTurn,
     finalText: string,
     options: { forceForEmptyFinal?: boolean } = {},
-  ): { wait: boolean; reason: string; toolResultChars: number } {
+  ): { wait: boolean; reason: string; toolResultChars: number; graceMs: number } {
     const visibleText = finalText.trim();
     const toolResultChars = this.getTurnToolResultCharCount(sessionId, turn);
     const hasToolWork = this.hasTurnToolWork(sessionId, turn);
 
     if (!visibleText || !hasToolWork) {
-      return { wait: false, reason: 'not a visible tool final risk', toolResultChars };
+      return {
+        wait: false,
+        reason: 'not a visible tool final risk',
+        toolResultChars,
+        graceMs: OpenClawRuntimeAdapter.CHAT_FINAL_COMPLETION_GRACE_MS,
+      };
     }
 
     const hasMaintenanceSignal = Boolean(
       turn.hasContextCompactionEvent
       || turn.hasContextMaintenanceTool
       || turn.pendingRecoverableFollowup
+      || turn.pendingOpenClawRetry
       || turn.pendingVisibleFinalContinuation
     );
     if (hasMaintenanceSignal) {
-      return { wait: true, reason: 'context maintenance signal is active', toolResultChars };
+      return {
+        wait: true,
+        reason: 'context maintenance signal is active',
+        toolResultChars,
+        graceMs: OpenClawRuntimeAdapter.VISIBLE_FINAL_CONTINUATION_GRACE_MS,
+      };
     }
 
     if (options.forceForEmptyFinal) {
-      return { wait: true, reason: 'empty final recovered short history text after tool work', toolResultChars };
+      return {
+        wait: true,
+        reason: 'empty final recovered short history text after tool work',
+        toolResultChars,
+        graceMs: OpenClawRuntimeAdapter.VISIBLE_FINAL_CONTINUATION_GRACE_MS,
+      };
     }
 
     const isShortVisibleFinal = visibleText.length <= OpenClawRuntimeAdapter.VISIBLE_FINAL_SHORT_TEXT_CHAR_THRESHOLD;
     const hasLargeToolResults = toolResultChars >= OpenClawRuntimeAdapter.VISIBLE_FINAL_TOOL_RESULT_CHAR_THRESHOLD;
     if (isShortVisibleFinal && hasLargeToolResults) {
-      return { wait: true, reason: 'short visible final followed large tool results', toolResultChars };
+      return {
+        wait: true,
+        reason: 'short visible final followed large tool results',
+        toolResultChars,
+        graceMs: OpenClawRuntimeAdapter.VISIBLE_FINAL_LARGE_TOOL_CONFIRMATION_GRACE_MS,
+      };
     }
 
-    return { wait: false, reason: 'visible final does not look recoverable', toolResultChars };
+    return {
+      wait: false,
+      reason: 'visible final does not look recoverable',
+      toolResultChars,
+      graceMs: OpenClawRuntimeAdapter.CHAT_FINAL_COMPLETION_GRACE_MS,
+    };
   }
 
   private shouldWaitForLifecycleFallbackContinuation(
@@ -1539,7 +1566,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       return {
         wait: true,
         reason: `missing chat.final lifecycle fallback: ${visibleRisk.reason}`,
-        graceMs: OpenClawRuntimeAdapter.VISIBLE_FINAL_CONTINUATION_GRACE_MS,
+        graceMs: visibleRisk.graceMs,
         pendingVisibleFinalContinuation: true,
         toolResultChars: visibleRisk.toolResultChars,
         visibleTextLen: visibleText.length,
@@ -5339,7 +5366,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
             ? visibleRetryRisk.reason
             : 'empty final after tool work',
           graceMs: syncedVisibleText
-            ? OpenClawRuntimeAdapter.VISIBLE_FINAL_CONTINUATION_GRACE_MS
+            ? visibleRetryRisk.graceMs
             : OpenClawRuntimeAdapter.SILENT_MAINTENANCE_FOLLOWUP_GRACE_MS,
           pendingThinkingOnlyHint: !syncedVisibleText,
           pendingVisibleFinalContinuation: Boolean(syncedVisibleText),
@@ -5486,7 +5513,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     if (visibleFinalContinuation.wait) {
       this.waitForRecoverableOpenClawRetry(sessionId, turn, payload.runId ?? turn.runId, {
         reason: visibleFinalContinuation.reason,
-        graceMs: OpenClawRuntimeAdapter.VISIBLE_FINAL_CONTINUATION_GRACE_MS,
+        graceMs: visibleFinalContinuation.graceMs,
         pendingVisibleFinalContinuation: true,
       });
       console.debug(

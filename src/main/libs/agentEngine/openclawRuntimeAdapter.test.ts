@@ -2125,7 +2125,7 @@ test('empty final with local tool messages waits when history only has interim a
   }
 });
 
-test('visible short tool final waits under large tool results and accepts same-run continuation', async () => {
+test('visible short tool final waits with retry signal and accepts same-run continuation', async () => {
   vi.useFakeTimers();
   try {
     const shortAnswer = 'I will inspect the logs and then summarize the restart timeline.';
@@ -2170,6 +2170,7 @@ test('visible short tool final waits under large tool results and accepts same-r
     const turn = createActiveTurn(session.id, sessionKey, 'run-visible-retry');
     turn.toolUseMessageIdByToolCallId.set('call-1', 'msg-2');
     turn.toolResultMessageIdByToolCallId.set('call-1', 'msg-3');
+    turn.pendingOpenClawRetry = true;
     adapter.activeTurns.set(session.id, turn);
     adapter.sessionIdByRunId.set('run-visible-retry', session.id);
     adapter.rememberSessionKey(session.id, sessionKey);
@@ -2228,12 +2229,12 @@ test('visible short tool final waits under large tool results and accepts same-r
   }
 });
 
-test('visible short tool final completes with existing text when no continuation arrives', async () => {
+test('visible short tool final uses short confirmation when only large tool results are present', async () => {
   vi.useFakeTimers();
   try {
-    const shortAnswer = 'I checked the logs and did not find a restart.';
+    const shortAnswer = 'A'.repeat(514);
     const lateAnswer = 'This late continuation should not be accepted.';
-    const largeToolResult = 'main log line\n'.repeat(1600);
+    const largeToolResult = 'T'.repeat(41_758);
     const { session, store } = createReconcileStore([
       { id: 'msg-1', type: 'user', content: 'check the logs', timestamp: 1, metadata: {} },
       { id: 'msg-2', type: 'tool_use', content: 'Using exec', timestamp: 2, metadata: { toolUseId: 'call-1' } },
@@ -2281,14 +2282,14 @@ test('visible short tool final completes with existing text when no continuation
       message: { role: 'assistant', content: shortAnswer },
     }, 1);
 
-    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.advanceTimersByTimeAsync(7_999);
     await Promise.resolve();
     await Promise.resolve();
 
     expect(completeSpy).not.toHaveBeenCalled();
     expect(session.messages.some((message) => message.type === 'system')).toBe(false);
 
-    await vi.advanceTimersByTimeAsync(120_000);
+    await vi.advanceTimersByTimeAsync(1);
     await Promise.resolve();
     await Promise.resolve();
 
