@@ -1,13 +1,12 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { PhotoIcon, SpeakerWaveIcon, VideoCameraIcon } from '@heroicons/react/24/outline';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 
-import type { DraftAttachment } from '../../store/slices/coworkSlice';
-
-export interface MediaLabel {
-  attachment: DraftAttachment;
-  label: string;
-  mediaType: 'image' | 'video' | 'audio';
-  index: number;
-}
+import {
+  filterMediaLabels,
+  type MediaLabel,
+  MediaMentionType,
+} from './mediaMentionUtils';
 
 interface MediaMentionPickerProps {
   items: MediaLabel[];
@@ -27,14 +26,15 @@ const MediaMentionPicker: React.FC<MediaMentionPickerProps> = ({
   const [selectedIndex, setSelectedIndex] = useState(0);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  const filtered = items.filter(item =>
-    item.label.toLowerCase().includes(filter.toLowerCase()) ||
-    item.attachment.name.toLowerCase().includes(filter.toLowerCase())
-  );
+  const filtered = useMemo(() => filterMediaLabels(items, filter), [filter, items]);
 
   useEffect(() => {
     setSelectedIndex(0);
   }, [filter]);
+
+  useEffect(() => {
+    setSelectedIndex(i => Math.min(i, Math.max(filtered.length - 1, 0)));
+  }, [filtered.length]);
 
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
     if (e.key === 'ArrowDown') {
@@ -59,73 +59,119 @@ const MediaMentionPicker: React.FC<MediaMentionPickerProps> = ({
     return () => document.removeEventListener('keydown', handleKeyDown, true);
   }, [handleKeyDown]);
 
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        onDismiss();
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [onDismiss]);
+
   if (filtered.length === 0) return null;
 
-  return (
+  const pickerWidth = 180;
+  const left = Math.max(8, Math.min(position.left, window.innerWidth - pickerWidth - 8));
+  const bottom = window.innerHeight - position.top + 4;
+
+  return createPortal(
     <div
       ref={containerRef}
-      className="absolute z-50 w-56 rounded-lg border border-border bg-popover shadow-lg overflow-hidden"
-      style={{ bottom: position.top, left: position.left }}
+      role="listbox"
+      aria-activedescendant={`media-mention-${selectedIndex}`}
+      className="overflow-hidden rounded-lg border border-[#E8EBF4] bg-white p-1 shadow-lg dark:border-white/10 dark:bg-neutral-900 dark:shadow-black/40"
+      style={{ position: 'fixed', left, bottom, width: pickerWidth, zIndex: 10000 }}
     >
-      <div className="max-h-40 overflow-y-auto p-1">
+      <div className="max-h-[200px] overflow-y-auto">
         {filtered.map((item, idx) => (
           <button
-            key={item.attachment.path}
+            id={`media-mention-${idx}`}
+            key={`${item.mediaType}:${item.index}:${item.attachment.path}`}
+            role="option"
+            aria-selected={idx === selectedIndex}
             type="button"
+            onMouseEnter={() => setSelectedIndex(idx)}
             onMouseDown={(e) => {
               e.preventDefault();
               onSelect(item);
             }}
-            className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs transition-colors ${
-              idx === selectedIndex ? 'bg-primary/10 text-primary' : 'hover:bg-background/80'
+            className={`flex h-9 w-full items-center gap-2 rounded-md px-2 text-left text-sm transition-colors ${
+              idx === selectedIndex
+                ? 'bg-primary/10 text-primary dark:bg-primary/20'
+                : 'text-foreground hover:bg-[#F7F8FC] dark:hover:bg-white/5'
             }`}
           >
-            <span className="shrink-0 rounded bg-primary/20 px-1 py-0.5 text-[10px] font-medium text-primary">
-              @{item.label}
+            <MiniPreview item={item} />
+            <span className="truncate font-medium">
+              {item.label}
             </span>
-            <span className="min-w-0 truncate text-secondary">{item.attachment.name}</span>
           </button>
         ))}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 };
 
 export default MediaMentionPicker;
 
-/**
- * Compute media labels for a list of attachments.
- * Images → 图片1, 图片2..., Videos → 视频1..., Audio → 音频1...
- */
-export function computeMediaLabels(attachments: DraftAttachment[]): MediaLabel[] {
-  const imageExts = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'ico', 'tiff', 'avif']);
-  const videoExts = new Set(['mp4', 'mov', 'avi', 'webm', 'mkv', 'flv', 'wmv', 'm4v']);
-  const audioExts = new Set(['mp3', 'wav', 'ogg', 'flac', 'aac', 'm4a', 'wma']);
+const MiniPreview: React.FC<{ item: MediaLabel }> = ({ item }) => {
+  const [thumbUrl, setThumbUrl] = useState<string | null>(item.attachment.dataUrl ?? null);
+  const [hasError, setHasError] = useState(false);
 
-  const getMediaType = (att: DraftAttachment): 'image' | 'video' | 'audio' | null => {
-    if (att.isImage) return 'image';
-    const ext = att.name.split('.').pop()?.toLowerCase() || '';
-    if (imageExts.has(ext)) return 'image';
-    if (videoExts.has(ext)) return 'video';
-    if (audioExts.has(ext)) return 'audio';
-    return null;
-  };
+  useEffect(() => {
+    setHasError(false);
 
-  const counters = { image: 0, video: 0, audio: 0 };
-  const labelMap = { image: '图片', video: '视频', audio: '音频' };
-  const labels: MediaLabel[] = [];
+    if (item.mediaType !== MediaMentionType.Image) {
+      setThumbUrl(null);
+      return;
+    }
+    if (item.attachment.dataUrl) {
+      setThumbUrl(item.attachment.dataUrl);
+      return;
+    }
+    if (!item.attachment.path || item.attachment.path.startsWith('inline:')) {
+      setThumbUrl(null);
+      return;
+    }
 
-  for (const att of attachments) {
-    const type = getMediaType(att);
-    if (!type) continue;
-    counters[type]++;
-    labels.push({
-      attachment: att,
-      label: `${labelMap[type]}${counters[type]}`,
-      mediaType: type,
-      index: counters[type],
-    });
+    let cancelled = false;
+    (async () => {
+      try {
+        const result = await window.electron?.dialog?.readFileAsDataUrl(item.attachment.path);
+        if (!cancelled && result?.success && result.dataUrl) {
+          setThumbUrl(result.dataUrl);
+        }
+      } catch {
+        if (!cancelled) setThumbUrl(null);
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [item.attachment.dataUrl, item.attachment.path, item.mediaType]);
+
+  if (item.mediaType === MediaMentionType.Image && thumbUrl && !hasError) {
+    return (
+      <img
+        src={thumbUrl}
+        alt=""
+        className="h-6 w-6 shrink-0 rounded object-cover"
+        onError={() => setHasError(true)}
+        draggable={false}
+      />
+    );
   }
 
-  return labels;
-}
+  const Icon = item.mediaType === MediaMentionType.Video
+    ? VideoCameraIcon
+    : item.mediaType === MediaMentionType.Audio
+      ? SpeakerWaveIcon
+      : PhotoIcon;
+
+  return (
+    <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded bg-[#F1F2FA] text-[#777A92] dark:bg-white/10 dark:text-neutral-300">
+      <Icon className="h-3.5 w-3.5" />
+    </span>
+  );
+};

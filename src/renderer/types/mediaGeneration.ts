@@ -54,5 +54,6 @@ export interface MediaAttachmentRef {
   mimeType: string;
   localPath?: string;
   remoteUrl?: string;
+  dataUrl?: string;
   role?: 'first_frame' | 'last_frame' | 'reference_image' | 'reference_video' | 'reference_audio';
 }

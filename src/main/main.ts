@@ -21,7 +21,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { Readable } from 'stream';
-import { pathToFileURL } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 
 import type { OpenClawSessionPatch } from '../common/openclawSession';
 import { buildSessionTitleFromInput } from '../common/sessionTitle';
@@ -140,7 +140,7 @@ import {
   getServerApiBaseUrl,
   getSkillStoreUrl,
   isTestModeEnabled,
-  refreshEndpointsTestMode,
+  getPortalTasksUrl, refreshEndpointsTestMode,
 } from './libs/endpoints';
 import {
   mergeEnterpriseOpenclawConfig,
@@ -2441,6 +2441,7 @@ interface MediaAttachmentRefMain {
   mimeType: string;
   localPath?: string;
   remoteUrl?: string;
+  dataUrl?: string;
   role?: string;
 }
 const mediaReferencesBySession = new Map<string, MediaAttachmentRefMain[]>();
@@ -3304,6 +3305,35 @@ if (!gotTheLock) {
       const mediaType = tool === MediaGenerationTool.Image ? 'image' : 'video';
       const endpoint = mediaType === 'image' ? '/api/media/images/generate' : '/api/media/videos/generate';
 
+      // Video generation confirmation: inform user about cost and duration
+      if (mediaType === 'video' && mcpBridgeServer) {
+        const durationSec = typeof args.durationSeconds === 'number' ? args.durationSeconds : null;
+        const costLine = durationSec
+          ? `本次预计大约消耗 ${durationSec * 100} 积分。`
+          : '费用约为 100积分/秒。';
+        const portalTasksUrl = getPortalTasksUrl();
+        const questionText = `视频生成任务耗时较长，${costLine}\n\n生成后的结果请及时下载保存！\n可在当前对话或「[个人主页-用量详情-生成任务](${portalTasksUrl})」查看。\n\n确认开始生成？`;
+        const confirmResponse = await mcpBridgeServer.askUserInternal([{
+          question: questionText,
+          options: [
+            { label: '确认生成', description: '开始视频生成任务' },
+            { label: '取消', description: '暂不生成' },
+          ],
+        }]);
+
+        const userCancelled = confirmResponse.behavior === 'deny'
+          || confirmResponse.answers?.[questionText] === '取消';
+
+        if (userCancelled) {
+          console.log('[MediaGeneration] user cancelled video generation confirmation.');
+          return {
+            content: [{ type: 'text', text: 'Video generation cancelled by user.' }],
+            isError: true,
+            details: { status: 'cancelled', reason: 'USER_CANCELLED' },
+          };
+        }
+      }
+
       const params: Record<string, unknown> = {};
       if (args.image) {
         const existing = (args.images as string[]) || [];
@@ -3312,6 +3342,10 @@ if (!gotTheLock) {
         params.images = args.images;
       }
       if (args.imageRoles) params.imageRoles = args.imageRoles;
+      if (args.firstFrame) params.firstFrame = args.firstFrame;
+      if (args.lastFrame) params.lastFrame = args.lastFrame;
+      if (args.referenceImages) params.referenceImages = args.referenceImages;
+      if (args.media) params.media = args.media;
       if (args.video) {
         const existing = (args.videos as string[]) || [];
         params.videos = [args.video as string, ...existing];
@@ -3323,25 +3357,39 @@ if (!gotTheLock) {
       if (args.resolution) params.resolution = args.resolution;
       if (args.size) params.size = args.size;
       if (args.count) params.count = args.count;
-      if (args.durationSeconds) params.durationSeconds = args.durationSeconds;
+      if (args.durationSeconds != null) params.durationSeconds = args.durationSeconds;
       if (args.audio != null) params.audio = args.audio;
       if (args.watermark != null) params.watermark = args.watermark;
       if (args.seed != null) params.seed = args.seed;
       if (args.returnLastFrame != null) params.returnLastFrame = args.returnLastFrame;
       if (args.cameraFixed != null) params.cameraFixed = args.cameraFixed;
       if (args.filename) params.filename = args.filename;
-      if (args.providerOptions) params.providerOptions = args.providerOptions;
+      if (args.providerOptions) {
+        params.providerOptions = args.providerOptions;
+        const providerOptions = args.providerOptions;
+        if (providerOptions && typeof providerOptions === 'object' && !Array.isArray(providerOptions)) {
+          const rawMedia = (providerOptions as Record<string, unknown>).media;
+          if (!params.media && Array.isArray(rawMedia)) {
+            params.media = rawMedia;
+          }
+        }
+      }
 
       // Merge @ media references into images/videos/imageRoles/videoRoles
       const refs = sessionId ? mediaReferencesBySession.get(sessionId) : undefined;
       if (refs && refs.length > 0) {
-        const imageRefs = refs.filter(r => r.mediaType === 'image' && r.localPath);
-        const videoRefs = refs.filter(r => r.mediaType === 'video' && r.localPath);
+        const resolveReferencedMediaValue = (ref: MediaAttachmentRefMain): string | undefined => (
+          ref.localPath || ref.dataUrl || ref.remoteUrl
+        );
+        const imageRefs = refs.filter(r => r.mediaType === 'image' && resolveReferencedMediaValue(r));
+        const videoRefs = refs.filter(r => r.mediaType === 'video' && resolveReferencedMediaValue(r));
         if (imageRefs.length > 0) {
           const existing = (params.images as string[]) || [];
           const imageRoles = (params.imageRoles as string[]) || [];
           for (const ref of imageRefs) {
-            existing.push(ref.localPath!);
+            const mediaValue = resolveReferencedMediaValue(ref);
+            if (!mediaValue) continue;
+            existing.push(mediaValue);
             imageRoles.push(ref.role || 'reference_image');
           }
           params.images = existing;
@@ -3351,7 +3399,9 @@ if (!gotTheLock) {
           const existing = (params.videos as string[]) || [];
           const videoRoles = (params.videoRoles as string[]) || [];
           for (const ref of videoRefs) {
-            existing.push(ref.localPath!);
+            const mediaValue = resolveReferencedMediaValue(ref);
+            if (!mediaValue) continue;
+            existing.push(mediaValue);
             videoRoles.push(ref.role || 'reference_video');
           }
           params.videos = existing;
@@ -3367,20 +3417,84 @@ if (!gotTheLock) {
       };
       const resolveRef = async (ref: string): Promise<string> => {
         if (!ref || ref.startsWith('http') || ref.startsWith('oss://') || ref.startsWith('data:')) return ref;
-        const buf = await fs.promises.readFile(path.resolve(ref));
-        const mime = MEDIA_MIME[path.extname(ref).toLowerCase()] || 'application/octet-stream';
+        const filePath = ref.startsWith('file://') ? fileURLToPath(ref) : path.resolve(ref);
+        const buf = await fs.promises.readFile(filePath);
+        const mime = MEDIA_MIME[path.extname(filePath).toLowerCase()] || 'application/octet-stream';
         return `data:${mime};base64,${buf.toString('base64')}`;
+      };
+      const resolveStringParam = async (name: string) => {
+        if (typeof params[name] === 'string') {
+          params[name] = await resolveRef(params[name] as string);
+        }
+      };
+      const resolveStringArrayParam = async (name: string) => {
+        if (Array.isArray(params[name])) {
+          params[name] = await Promise.all((params[name] as string[]).map(resolveRef));
+        }
+      };
+      const resolveMediaItem = async (item: unknown): Promise<unknown> => {
+        if (typeof item === 'string') {
+          return resolveRef(item);
+        }
+        if (!item || typeof item !== 'object' || Array.isArray(item)) {
+          return item;
+        }
+        const next: Record<string, unknown> = { ...(item as Record<string, unknown>) };
+        if (typeof next.url === 'string') {
+          next.url = await resolveRef(next.url);
+        }
+        for (const key of ['image_url', 'video_url', 'audio_url']) {
+          const nested = next[key];
+          if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
+            const nestedRecord = nested as Record<string, unknown>;
+            if (typeof nestedRecord.url === 'string') {
+              next[key] = { ...nestedRecord, url: await resolveRef(nestedRecord.url) };
+            }
+          }
+        }
+        return next;
       };
       if (Array.isArray(params.images)) {
         params.images = await Promise.all((params.images as string[]).map(resolveRef));
       }
+      await resolveStringParam('firstFrame');
+      await resolveStringParam('lastFrame');
+      await resolveStringArrayParam('referenceImages');
       if (Array.isArray(params.videos)) {
         params.videos = await Promise.all((params.videos as string[]).map(resolveRef));
       }
+      if (Array.isArray(params.media)) {
+        params.media = await Promise.all((params.media as unknown[]).map(resolveMediaItem));
+      }
+
+      const inferVideoGenerationType = (): string => {
+        const normalizedModel = selectedModel.toLowerCase();
+        if (normalizedModel.includes('happyhorse-1.0-r2v')) return 'r2v';
+        if (normalizedModel.includes('happyhorse-1.0-t2v')) return 't2v';
+        if (normalizedModel.includes('happyhorse-1.0-i2v')) return 'i2v';
+
+        const imageRoles = Array.isArray(params.imageRoles)
+          ? (params.imageRoles as unknown[]).map(role => String(role).toLowerCase())
+          : [];
+        const mediaItems = Array.isArray(params.media) ? params.media as unknown[] : [];
+        const mediaTypes = mediaItems
+          .filter(item => item && typeof item === 'object' && !Array.isArray(item))
+          .map(item => String((item as Record<string, unknown>).type || '').toLowerCase());
+        const hasReferenceImage = (Array.isArray(params.referenceImages) && (params.referenceImages as unknown[]).length > 0)
+          || imageRoles.some(role => role === 'reference_image' || role === 'reference')
+          || mediaTypes.some(type => type === 'reference_image');
+        if (hasReferenceImage) return 'r2v';
+
+        const hasFirstFrame = typeof params.firstFrame === 'string'
+          || imageRoles.some(role => role === 'first_frame' || role === 'firstframe')
+          || mediaTypes.some(type => type === 'first_frame')
+          || (Array.isArray(params.images) && (params.images as unknown[]).length > 0);
+        return hasFirstFrame ? 'i2v' : 't2v';
+      };
 
       const generateReq = {
         model: selectedModel,
-        type: mediaType,
+        type: mediaType === 'video' ? inferVideoGenerationType() : mediaType,
         prompt,
         params,
       };
@@ -4765,7 +4879,8 @@ if (!gotTheLock) {
           imageModelId?: string;
           videoModelId?: string;
         };
-      },
+        mediaReferences?: MediaAttachmentRefMain[];
+  },
     ) => {
       try {
         const engineStatus = await ensureOpenClawRunningForCowork();
@@ -4818,6 +4933,12 @@ if (!gotTheLock) {
         } else {
           mediaSelectionBySession.delete(session.id);
         }
+
+      if (options.mediaReferences?.length) {
+        mediaReferencesBySession.set(session.id, options.mediaReferences);
+      } else {
+        mediaReferencesBySession.delete(session.id);
+      }
 
         const messageMetadata: Record<string, unknown> = {};
         if (options.activeSkillIds?.length) {

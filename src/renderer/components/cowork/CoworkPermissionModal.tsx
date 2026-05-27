@@ -77,6 +77,41 @@ type QuestionOption = {
   description?: string;
 };
 
+const renderTextWithLinks = (text: string): React.ReactNode[] => {
+  const linkPattern = /\[([^\]]+)\]\(([^)]+)\)/g;
+  const parts: React.ReactNode[] = [];
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = linkPattern.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      parts.push(text.slice(lastIndex, match.index));
+    }
+    const linkText = match[1];
+    const linkUrl = match[2];
+    parts.push(
+      <a
+        key={match.index}
+        href="#"
+        onClick={(e) => {
+          e.preventDefault();
+          (window as any).electron?.shell?.openExternal(linkUrl);
+        }}
+        className="text-primary hover:underline cursor-pointer"
+      >
+        {linkText}
+      </a>
+    );
+    lastIndex = match.index + match[0].length;
+  }
+
+  if (lastIndex < text.length) {
+    parts.push(text.slice(lastIndex));
+  }
+
+  return parts;
+};
+
 type QuestionItem = {
   question: string;
   header?: string;
@@ -374,8 +409,8 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
           {isConfirmMode ? (
             /* Simple confirm dialog — show question text + allow/deny buttons */
             <div className="px-3 py-2 rounded-lg bg-background">
-              <p className="text-sm text-foreground whitespace-pre-wrap">
-                {questions[0].question}
+              <p className="text-sm text-foreground whitespace-pre-wrap text-left">
+                {renderTextWithLinks(questions[0].question)}
               </p>
               {requestedCommand && (
                 <div className="mt-3">

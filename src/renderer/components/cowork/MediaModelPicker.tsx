@@ -25,6 +25,8 @@ const MEDIA_ICON_HINTS: Array<{ pattern: RegExp; providerKey: string }> = [
   { pattern: /doubao|seedream|豆包/i, providerKey: 'doubao' },
   { pattern: /minimax/i, providerKey: 'minimax' },
   { pattern: /qwen|qwq|wan2\.7|z-image/i, providerKey: 'qwen' },
+  { pattern: /kling/i, providerKey: 'kling' },
+  { pattern: /happyhorse|happy.horse/i, providerKey: 'happyhorse' },
 ];
 
 const resolveMediaModelIcon = (model: MediaModel): React.ReactNode => {
@@ -60,16 +62,15 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled 
   selectionRef.current = selection;
 
   const fetchModels = useCallback(async () => {
-    setIsLoading(true);
+    const hasCachedModels = mediaModels.image.length > 0 || mediaModels.video.length > 0;
+    if (!hasCachedModels) {
+      setIsLoading(true);
+    }
     try {
       const [imageResult, videoResult] = await Promise.all([
         window.electron.media.getModels('image'),
         window.electron.media.getModels('video'),
       ]);
-      console.log('[MediaModelPicker] fetchModels results:', {
-        image: { success: imageResult.success, count: imageResult.models?.length, error: imageResult.error },
-        video: { success: videoResult.success, count: videoResult.models?.length, error: videoResult.error },
-      });
       if (!imageResult.success) console.warn('[MediaModelPicker] image models fetch failed:', imageResult.error);
       if (!videoResult.success) console.warn('[MediaModelPicker] video models fetch failed:', videoResult.error);
       dispatch(setMediaModels({
@@ -115,13 +116,9 @@ const MediaModelPicker: React.FC<MediaModelPickerProps> = ({ draftKey, disabled 
     } finally {
       setIsLoading(false);
     }
-  }, [dispatch, draftKey]);
+  }, [dispatch, draftKey, mediaModels.image.length, mediaModels.video.length]);
 
   useEffect(() => {
-    console.log('[MediaModelPicker] useEffect check:', {
-      isOpen, isLoggedIn, subscriptionStatus: authQuota?.subscriptionStatus, isSubscribed,
-      imageCount: mediaModels.image.length, videoCount: mediaModels.video.length,
-    });
     if (isOpen && isSubscribed) {
       fetchModels();
     }

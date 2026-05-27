@@ -1,9 +1,10 @@
-import React, { useState, useEffect } from 'react';
-import XMarkIcon from '../icons/XMarkIcon';
-import FileTypeIcon from '../icons/fileTypes/FileTypeIcon';
-import { ImageFileIcon, getFileTypeInfo } from '../icons/fileTypes/index';
+import React, { useEffect, useState } from 'react';
+
 import { i18nService } from '../../services/i18n';
 import type { DraftAttachment } from '../../store/slices/coworkSlice';
+import FileTypeIcon from '../icons/fileTypes/FileTypeIcon';
+import { getFileTypeInfo, ImageFileIcon } from '../icons/fileTypes/index';
+import XMarkIcon from '../icons/XMarkIcon';
 
 interface AttachmentCardProps {
   attachment: DraftAttachment;
@@ -13,7 +14,7 @@ interface AttachmentCardProps {
 
 /**
  * Renders a single attachment as a card.
- * - Image attachments: 64×64 thumbnail with overlay file name
+ * - Image attachments: fixed thumbnail with a clear media mention label
  * - Non-image attachments: horizontal card with file-type icon + name + type label
  */
 const AttachmentCard: React.FC<AttachmentCardProps> = ({ attachment, onRemove, label }) => {
@@ -61,39 +62,32 @@ const ImageCard: React.FC<AttachmentCardProps> = ({ attachment, onRemove, label 
 
   return (
     <div
-      className="group relative h-16 w-16 flex-shrink-0 rounded-lg border dark:border-claude-darkBorder border-claude-border overflow-hidden bg-claude-surface dark:bg-claude-darkSurface"
+      className="group relative h-[72px] w-[72px] flex-shrink-0"
       title={attachment.path}
     >
       {/* Thumbnail or fallback */}
       {loading ? (
-        <div className="flex h-full w-full items-center justify-center">
+        <div className="flex h-full w-full items-center justify-center rounded-md border border-border bg-background shadow-subtle">
           <ImageFileIcon className="h-6 w-6 text-blue-400 animate-pulse" />
         </div>
       ) : showFallback ? (
-        <div className="flex h-full w-full items-center justify-center">
+        <div className="flex h-full w-full items-center justify-center rounded-md border border-border bg-background shadow-subtle">
           <ImageFileIcon className="h-6 w-6 text-blue-400" />
         </div>
       ) : (
         <img
           src={thumbUrl!}
           alt={attachment.name}
-          className="h-full w-full object-cover"
+          className="h-full w-full rounded-md border border-border object-cover shadow-subtle"
           onError={() => setImgError(true)}
           draggable={false}
         />
       )}
 
-      {/* File name overlay at bottom */}
-      <div className="absolute inset-x-0 bottom-0 bg-black/50 px-1 py-0.5">
-        <span className="block truncate text-[10px] leading-tight text-white">
-          {attachment.name}
-        </span>
-      </div>
-
-      {/* Media label badge — top-left */}
+      {/* Media label badge — bottom */}
       {label && (
-        <div className="absolute top-0.5 left-0.5 rounded bg-primary/80 px-1 py-px">
-          <span className="text-[9px] font-medium leading-tight text-white">{label}</span>
+        <div className="absolute inset-x-0 bottom-0 flex h-5 items-center justify-center border-t border-white/45 bg-neutral-300/60 px-1.5 backdrop-blur-md">
+          <span className="text-[10px] font-semibold leading-none text-white drop-shadow-sm">{label}</span>
         </div>
       )}
 
@@ -101,7 +95,7 @@ const ImageCard: React.FC<AttachmentCardProps> = ({ attachment, onRemove, label 
       <button
         type="button"
         onClick={() => onRemove(attachment.path)}
-        className="absolute top-0.5 right-0.5 hidden group-hover:flex h-4 w-4 items-center justify-center rounded-full bg-black/60 hover:bg-black/80 text-white"
+        className="absolute right-1 top-1 hidden h-5 w-5 items-center justify-center rounded-full bg-black/60 text-white hover:bg-black/80 group-hover:flex"
         aria-label={i18nService.t('coworkAttachmentRemove')}
         title={i18nService.t('coworkAttachmentRemove')}
       >

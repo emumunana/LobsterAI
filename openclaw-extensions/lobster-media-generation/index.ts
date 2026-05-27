@@ -1,6 +1,8 @@
 import { Type } from '@sinclair/typebox';
 import type { OpenClawPluginApi } from 'openclaw/plugin-sdk';
 
+import { isLobsterAiDesktopSessionKey } from './sessionKey';
+
 type PluginConfig = {
   callbackUrl: string;
   secret: string;
@@ -173,6 +175,10 @@ const VideoGenerateSchema = Type.Object({
   image: Type.Optional(Type.String({ description: 'Single reference image file path (e.g. first frame for image-to-video).' })),
   images: Type.Optional(Type.Array(Type.String(), { description: 'Multiple reference image file paths. Use with imageRoles to specify each image\'s role.' })),
   imageRoles: Type.Optional(Type.Array(Type.String(), { description: 'Role for each image: "first_frame", "last_frame", "reference_image". Must match images array length.' })),
+  firstFrame: Type.Optional(Type.String({ description: 'First-frame image file path or URL for image-to-video models.' })),
+  lastFrame: Type.Optional(Type.String({ description: 'Last-frame image file path or URL for first/last-frame video models.' })),
+  referenceImages: Type.Optional(Type.Array(Type.String(), { description: 'Reference image file paths or URLs for reference-to-video models.' })),
+  media: Type.Optional(Type.Array(Type.Record(Type.String(), Type.Unknown()), { description: 'Provider-native media array. Use only when the selected model documentation requires it.' })),
   video: Type.Optional(Type.String({ description: 'Single reference video file path (for video-to-video generation).' })),
   videos: Type.Optional(Type.Array(Type.String(), { description: 'Multiple reference video file paths.' })),
   videoRoles: Type.Optional(Type.Array(Type.String(), { description: 'Role for each video: "reference_video".' })),
@@ -207,7 +213,7 @@ const plugin = {
 
     api.registerTool((ctx) => {
       const sessionKey = ctx.sessionKey ?? '';
-      if (!sessionKey.startsWith('agent:main:lobsterai:')) {
+      if (!isLobsterAiDesktopSessionKey(sessionKey)) {
         return null;
       }
 
@@ -245,7 +251,7 @@ const plugin = {
 
     api.registerTool((ctx) => {
       const sessionKey = ctx.sessionKey ?? '';
-      if (!sessionKey.startsWith('agent:main:lobsterai:')) {
+      if (!isLobsterAiDesktopSessionKey(sessionKey)) {
         return null;
       }
 

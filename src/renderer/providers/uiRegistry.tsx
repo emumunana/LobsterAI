@@ -8,6 +8,8 @@ import {
   DoubaoIcon,
   GeminiIcon,
   GitHubCopilotIcon,
+  HappyHorseIcon,
+  KlingIcon,
   LmStudioIcon,
   MiniMaxIcon,
   MoonshotIcon,
@@ -25,6 +27,8 @@ import {
 
 export const ProviderIconId = {
   Doubao: 'doubao',
+  HappyHorse: 'happyhorse',
+  Kling: 'kling',
 } as const;
 export type ProviderIconId = typeof ProviderIconId[keyof typeof ProviderIconId];
 
@@ -32,6 +36,8 @@ const PROVIDER_ICON_MAP: Record<string, React.ReactNode> = {
   [ProviderName.OpenAI]:       <OpenAIIcon />,
   [ProviderName.DeepSeek]:     <DeepSeekIcon />,
   [ProviderIconId.Doubao]:     <DoubaoIcon />,
+  [ProviderIconId.HappyHorse]: <HappyHorseIcon />,
+  [ProviderIconId.Kling]:      <KlingIcon />,
   [ProviderName.Gemini]:       <GeminiIcon />,
   [ProviderName.Anthropic]:    <AnthropicIcon />,
   [ProviderName.Moonshot]:     <MoonshotIcon />,

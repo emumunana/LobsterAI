@@ -276,6 +276,7 @@ export interface CoworkStartOptions {
   modelOverride?: string;
   imageAttachments?: CoworkImageAttachment[];
   mediaSelection?: { mode: string; modelId?: string; modelName?: string; imageModelId?: string; videoModelId?: string };
+  mediaReferences?: import('./mediaGeneration').MediaAttachmentRef[];
 }
 
 // Continue session options

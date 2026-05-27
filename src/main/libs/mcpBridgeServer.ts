@@ -119,6 +119,36 @@ export class McpBridgeServer {
   }
 
   /**
+   * Programmatic ask-user request from within the main process.
+   * Reuses the same pending/resolve/callback infrastructure as the HTTP endpoint
+   * but skips HTTP and authentication.
+   */
+  async askUserInternal(questions: AskUserRequest['questions'], timeoutMs = 120_000): Promise<AskUserResponse> {
+    const requestId = crypto.randomUUID();
+    log('INFO', `AskUser (internal) request, requestId=${requestId}`);
+
+    return new Promise<AskUserResponse>((resolve) => {
+      const timer = setTimeout(() => {
+        log('INFO', `AskUser (internal) timeout, requestId=${requestId}`);
+        this.pendingAskUser.delete(requestId);
+        this.onAskUserDismissCallback?.(requestId);
+        resolve({ behavior: 'deny' });
+      }, timeoutMs);
+
+      this.pendingAskUser.set(requestId, { requestId, resolve, timer });
+
+      if (this.onAskUserCallback) {
+        this.onAskUserCallback({ requestId, questions });
+      } else {
+        log('WARN', 'AskUser callback not registered, denying (internal)');
+        clearTimeout(timer);
+        this.pendingAskUser.delete(requestId);
+        resolve({ behavior: 'deny' });
+      }
+    });
+  }
+
+  /**
    * Start the HTTP callback server on a free port.
    */
   async start(): Promise<number> {
