@@ -1,12 +1,12 @@
 import { ArrowDownTrayIcon, ArrowLeftIcon, TrashIcon, XMarkIcon } from '@heroicons/react/24/outline';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch } from 'react-redux';
 
 import { i18nService } from '../../services/i18n';
 import { kitService } from '../../services/kit';
 import { resolveLocalizedText } from '../../services/skill';
 import { setInstalledKits as setInstalledKitsAction, setMarketplaceKits } from '../../store/slices/kitSlice';
-import type { InstalledKit, MarketplaceKit } from '../../types/kit';
+import type { InstalledKit, KitSkillRef, MarketplaceKit } from '../../types/kit';
 import Modal from '../common/Modal';
 import SearchIcon from '../icons/SearchIcon';
 import KitIcon from './KitIcon';
@@ -21,6 +21,115 @@ type KitOperationType = typeof KitOperationType[keyof typeof KitOperationType];
 interface KitsManagerProps {
   onTryAsking?: (text: string, kitId: string) => void;
 }
+
+interface TooltipPosition {
+  left: number;
+  top: number;
+  width: number;
+}
+
+const SKILL_TOOLTIP_WIDTH = 288;
+const SKILL_TOOLTIP_MIN_WIDTH = 180;
+const SKILL_TOOLTIP_VIEWPORT_MARGIN = 12;
+const SKILL_TOOLTIP_GAP = 8;
+
+const clamp = (value: number, min: number, max: number) => (
+  Math.min(Math.max(value, min), Math.max(min, max))
+);
+
+const KitSkillPill: React.FC<{ skill: KitSkillRef }> = ({ skill }) => {
+  const name = resolveLocalizedText(skill.name).replace(/^\//, '');
+  const description = skill.description ? resolveLocalizedText(skill.description) : '';
+  const triggerRef = useRef<HTMLSpanElement>(null);
+  const tooltipRef = useRef<HTMLSpanElement>(null);
+  const [tooltipVisible, setTooltipVisible] = useState(false);
+  const [tooltipPosition, setTooltipPosition] = useState<TooltipPosition | null>(null);
+
+  const updateTooltipPosition = useCallback(() => {
+    const trigger = triggerRef.current;
+    if (!trigger || !description) return;
+
+    const triggerRect = trigger.getBoundingClientRect();
+    const tooltipHeight = tooltipRef.current?.getBoundingClientRect().height ?? 0;
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+    const maxWidth = Math.max(SKILL_TOOLTIP_MIN_WIDTH, viewportWidth - SKILL_TOOLTIP_VIEWPORT_MARGIN * 2);
+    const width = Math.min(SKILL_TOOLTIP_WIDTH, maxWidth);
+    const left = clamp(
+      triggerRect.left,
+      SKILL_TOOLTIP_VIEWPORT_MARGIN,
+      viewportWidth - width - SKILL_TOOLTIP_VIEWPORT_MARGIN,
+    );
+    const hasRoomAbove = triggerRect.top >= tooltipHeight + SKILL_TOOLTIP_GAP + SKILL_TOOLTIP_VIEWPORT_MARGIN;
+    const rawTop = hasRoomAbove
+      ? triggerRect.top - tooltipHeight - SKILL_TOOLTIP_GAP
+      : triggerRect.bottom + SKILL_TOOLTIP_GAP;
+    const top = clamp(
+      rawTop,
+      SKILL_TOOLTIP_VIEWPORT_MARGIN,
+      viewportHeight - tooltipHeight - SKILL_TOOLTIP_VIEWPORT_MARGIN,
+    );
+
+    setTooltipPosition({
+      left,
+      top,
+      width,
+    });
+  }, [description]);
+
+  useLayoutEffect(() => {
+    if (!tooltipVisible || !description) return undefined;
+
+    updateTooltipPosition();
+    window.addEventListener('resize', updateTooltipPosition);
+    window.addEventListener('scroll', updateTooltipPosition, true);
+    return () => {
+      window.removeEventListener('resize', updateTooltipPosition);
+      window.removeEventListener('scroll', updateTooltipPosition, true);
+    };
+  }, [description, tooltipVisible, updateTooltipPosition]);
+
+  const showTooltip = () => {
+    if (!description) return;
+    setTooltipVisible(true);
+  };
+
+  const hideTooltip = () => {
+    setTooltipVisible(false);
+    setTooltipPosition(null);
+  };
+
+  return (
+    <span
+      ref={triggerRef}
+      className="relative inline-flex"
+      onBlur={hideTooltip}
+      onFocus={showTooltip}
+      onMouseEnter={showTooltip}
+      onMouseLeave={hideTooltip}
+    >
+      <span
+        className="inline-flex items-center rounded-lg border border-border bg-surface-raised px-2.5 py-1 text-xs font-medium text-secondary"
+      >
+        {name}
+      </span>
+      {description && tooltipVisible && (
+        <span
+          ref={tooltipRef}
+          className="pointer-events-none fixed z-50 rounded-lg border border-border bg-surface px-3 py-2 text-left text-xs font-normal leading-5 text-foreground shadow-card"
+          style={{
+            left: tooltipPosition?.left ?? 0,
+            top: tooltipPosition?.top ?? 0,
+            visibility: tooltipPosition ? 'visible' : 'hidden',
+            width: tooltipPosition?.width ?? SKILL_TOOLTIP_WIDTH,
+          }}
+        >
+          {description}
+        </span>
+      )}
+    </span>
+  );
+};
 
 const KitsManager: React.FC<KitsManagerProps> = ({ onTryAsking }) => {
   const dispatch = useDispatch();
@@ -280,12 +389,7 @@ const KitsManager: React.FC<KitsManagerProps> = ({ onTryAsking }) => {
             </h3>
             <div className="flex flex-wrap gap-2">
               {selectedKit.skills.list.map((skill) => (
-                <span
-                  key={skill.id}
-                  className="inline-flex items-center px-2.5 py-1 text-xs font-medium rounded-lg bg-surface-raised text-secondary border border-border"
-                >
-                  {resolveLocalizedText(skill.name).replace(/^\//, '')}
-                </span>
+                <KitSkillPill key={skill.id} skill={skill} />
               ))}
             </div>
           </div>

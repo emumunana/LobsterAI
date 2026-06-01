@@ -9,7 +9,7 @@ import { RootState } from '../../store';
 import { setInstalledKits, setMarketplaceKits } from '../../store/slices/kitSlice';
 import type { MarketplaceKit } from '../../types/kit';
 import SearchIcon from '../icons/SearchIcon';
-import KitIcon from './KitIcon';
+import SidebarKitsIcon from '../icons/SidebarKitsIcon';
 
 const MIN_SEARCHABLE_KIT_COUNT = 3;
 
@@ -187,8 +187,12 @@ const KitsPopover: React.FC<KitsPopoverProps> = ({
                     : 'hover:bg-surface-raised'
                 }`}
               >
-                <div className="mt-0.5 flex h-8 w-8 flex-shrink-0 items-center justify-center">
-                  <KitIcon icon={kit.icon} className="h-8 w-8" />
+                <div
+                  className={`mt-[3px] flex h-5 w-5 flex-shrink-0 items-center justify-center ${
+                    isActive ? 'text-foreground' : 'text-secondary'
+                  }`}
+                >
+                  <SidebarKitsIcon className="h-[18px] w-[18px]" />
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex min-w-0 items-center gap-1.5">
