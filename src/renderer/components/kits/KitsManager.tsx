@@ -206,7 +206,7 @@ const KitsManager: React.FC<KitsManagerProps> = ({ onTryAsking }) => {
                   key={skill.id}
                   className="inline-flex items-center px-2.5 py-1 text-xs font-medium rounded-lg bg-surface-raised text-secondary border border-border"
                 >
-                  {skill.name.replace(/^\//, '')}
+                  {resolveLocalizedText(skill.name).replace(/^\//, '')}
                 </span>
               ))}
             </div>

@@ -30,8 +30,20 @@ export interface ResolvedKitCapabilities {
   connectors: unknown[];
 }
 
+export interface LocalizedText {
+  en: string;
+  zh: string;
+}
+
+export interface KitSkillMetadata {
+  id: string;
+  name?: string | LocalizedText;
+  description?: string | LocalizedText;
+}
+
 export interface InstalledKitSkills {
   skillIds: string[];
+  metadata?: Record<string, KitSkillMetadata>;
 }
 
 export interface InstalledKitRecord {

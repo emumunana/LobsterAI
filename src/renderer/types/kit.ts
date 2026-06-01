@@ -1,9 +1,9 @@
-import type { InstalledKitRecord } from '../../shared/kit/constants';
-import type { LocalizedText } from './skill';
+import type { InstalledKitRecord, LocalizedText } from '../../shared/kit/constants';
 
 export interface KitSkillRef {
   id: string;
-  name: string;
+  name: string | LocalizedText;
+  description?: string | LocalizedText;
 }
 
 export interface KitSkillBundle {

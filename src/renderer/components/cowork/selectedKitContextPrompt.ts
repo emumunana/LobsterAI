@@ -77,7 +77,7 @@ const buildSkillRefs = (
   if (marketplaceSkillRefs.length > 0) {
     return marketplaceSkillRefs.map(skill => ({
       id: skill.id,
-      name: skill.name,
+      name: resolveLocalizedText(skill.name),
     }));
   }
 

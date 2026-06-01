@@ -12,6 +12,7 @@ import type { HtmlShareAccessMode, HtmlShareStatus } from '../../shared/htmlShar
 import type {
   InstalledKitRecord,
   KitReference,
+  KitSkillMetadata,
   ResolvedKitCapabilities,
 } from '../../shared/kit/constants';
 import type {
@@ -403,6 +404,7 @@ interface IElectronAPI {
       bundleUrl: string;
       version: string;
       skillListIds: string[];
+      skillList?: KitSkillMetadata[];
       mcpServers?: unknown[] | null;
       connectors?: unknown[] | null;
     }) => Promise<{ success: boolean; skillIds?: string[]; error?: string }>;

@@ -11,6 +11,7 @@ import { DialogIpc } from '../shared/dialog/constants';
 import { type HtmlShareAccessMode, HtmlShareIpc } from '../shared/htmlShare/constants';
 import type {
   KitReference,
+  KitSkillMetadata,
   ResolvedKitCapabilities,
 } from '../shared/kit/constants';
 import {
@@ -75,6 +76,7 @@ contextBridge.exposeInMainWorld('electron', {
       bundleUrl: string;
       version: string;
       skillListIds: string[];
+      skillList?: KitSkillMetadata[];
       mcpServers?: unknown[] | null;
       connectors?: unknown[] | null;
     }) =>
