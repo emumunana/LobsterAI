@@ -219,6 +219,7 @@ import {
 import { collectReferencedEnvVarNames, pickReferencedSecretEnvVars } from './libs/openclawSecretEnv';
 import { startOpenClawTokenProxy, stopOpenClawTokenProxy } from './libs/openclawTokenProxy';
 import { migrateMainAgentWorkspace } from './libs/openclawWorkspaceMigration';
+import { isHiddenUserPluginId } from './libs/pluginManager';
 import { ensurePythonRuntimeReady } from './libs/pythonRuntime';
 import { serializeForLog } from './libs/sanitizeForLog';
 import { SqliteBackupManager } from './libs/sqliteBackup/sqliteBackupManager';
@@ -1663,6 +1664,7 @@ const getOpenClawConfigSync = (): OpenClawConfigSync => {
       getUserPlugins: () =>
         getCoworkStore()
           .listUserPlugins()
+          .filter(p => !isHiddenUserPluginId(p.pluginId))
           .map(p => ({ pluginId: p.pluginId, enabled: p.enabled, config: p.config })),
       canUseMediaGeneration: () => cachedMediaGenerationEntitled,
     });
