@@ -14,7 +14,10 @@ import {
   CoworkForkMode,
   type CoworkForkMode as CoworkForkModeType,
 } from '../shared/cowork/constants';
-import type { CoworkSelectedTextSnippet } from '../shared/cowork/selectedText';
+import {
+  type CoworkSelectedTextSnippet,
+  CoworkSelectedTextSource,
+} from '../shared/cowork/selectedText';
 import type {
   KitReference,
   ResolvedKitCapabilities,
@@ -1057,7 +1060,12 @@ export class CoworkStore {
       if (Array.isArray(sanitized.selectedTextSnippets)) {
         sanitized.selectedTextSnippets = sanitized.selectedTextSnippets.map(snippet => ({
           ...snippet,
-          sourceMessageId: forkedMessageIds.get(snippet.sourceMessageId) ?? snippet.sourceMessageId,
+          ...(snippet.sourceMessageId && (snippet.sourceType ?? snippet.sourceMessageType) === CoworkSelectedTextSource.AssistantMessage
+            ? {
+              sourceMessageId: forkedMessageIds.get(snippet.sourceMessageId) ?? snippet.sourceMessageId,
+              sourceId: forkedMessageIds.get(snippet.sourceMessageId) ?? snippet.sourceId,
+            }
+            : {}),
         }));
       }
       return Object.keys(sanitized).length > 0 ? JSON.stringify(sanitized) : null;

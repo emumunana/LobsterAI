@@ -3,8 +3,15 @@ import React, { useMemo } from 'react';
 import MarkdownContent from '@/components/MarkdownContent';
 import type { Artifact } from '@/types/artifact';
 
+import { CoworkSelectedTextSource } from '../../../../shared/cowork/selectedText';
+import {
+  type ArtifactSelectedTextContext,
+  useArtifactSelectedTextAction,
+} from '../artifactSelectedText';
+
 interface MarkdownRendererProps {
   artifact: Artifact;
+  selectedTextContext?: ArtifactSelectedTextContext;
 }
 
 const stripHashAndQuery = (value: string): string => value.split('#')[0].split('?')[0];
@@ -108,11 +115,16 @@ const createMarkdownFileResolver = (
   };
 };
 
-const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ artifact }) => {
+const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ artifact, selectedTextContext }) => {
   const resolveLocalFilePath = useMemo(
     () => createMarkdownFileResolver(artifact.filePath),
     [artifact.filePath]
   );
+  const { actionButton, containerRef, handleMouseUp } = useArtifactSelectedTextAction({
+    artifact,
+    sourceType: CoworkSelectedTextSource.ArtifactMarkdown,
+    selectedTextContext,
+  });
 
   if (!artifact.content) {
     return (
@@ -123,7 +135,12 @@ const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ artifact }) => {
   }
 
   return (
-    <div className="h-full overflow-auto p-6">
+    <div
+      ref={containerRef}
+      onMouseUp={handleMouseUp}
+      className="relative h-full overflow-auto p-6"
+    >
+      {actionButton}
       <MarkdownContent
         content={artifact.content}
         resolveLocalFilePath={resolveLocalFilePath}

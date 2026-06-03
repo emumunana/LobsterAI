@@ -126,6 +126,12 @@ const logDetailDiagnostic = (message: string): void => {
   window.electron?.log?.fromRenderer?.('info', 'CoworkSessionDetail', message);
 };
 
+const getSelectionAnchorRect = (range: Range): DOMRect => {
+  const lineRects = Array.from(range.getClientRects())
+    .filter(rect => rect.width > 0 && rect.height > 0);
+  return lineRects[0] ?? range.getBoundingClientRect();
+};
+
 const getSelectedAssistantTextRange = (): SelectedAssistantTextRange | null => {
   const selection = window.getSelection();
   if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
@@ -144,7 +150,7 @@ const getSelectedAssistantTextRange = (): SelectedAssistantTextRange | null => {
   return {
     text,
     sourceMessageId,
-    rect: range.getBoundingClientRect(),
+    rect: getSelectionAnchorRect(range),
   };
 };
 
@@ -801,17 +807,19 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     syncSelectedTextActionPosition({ closeWhenMissing: true });
   }, [remoteManaged, syncSelectedTextActionPosition]);
 
-  const handleAddSelectedText = useCallback(() => {
-    if (!currentSession?.id || !selectedTextAction) return;
-    const snippet: CoworkSelectedTextSnippet = {
-      id: `selected-text-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      text: selectedTextAction.text,
-      sourceMessageId: selectedTextAction.sourceMessageId,
-      sourceMessageType: CoworkSelectedTextSource.AssistantMessage,
-      createdAt: Date.now(),
-    };
+  const addSelectedTextSnippetToDraft = useCallback((snippet: CoworkSelectedTextSnippet) => {
+    if (!currentSession?.id) return;
+    const sourceType = snippet.sourceType ?? snippet.sourceMessageType ?? 'unknown';
+    const sourceLabel = snippet.sourceTitle?.trim()
+      || snippet.sourceId
+      || snippet.sourceMessageId
+      || 'unknown source';
     const result = normalizeCoworkSelectedTextSnippets([...selectedDraftSnippets, snippet]);
     if (result.success === false) {
+      logDetailDiagnostic(
+        `rejected a selected text excerpt for session ${currentSession.id}; `
+        + `source type is ${sourceType}, source is ${sourceLabel}, and reason is ${result.error}`,
+      );
       window.dispatchEvent(new CustomEvent('app:showToast', {
         detail: i18nService.t(SELECTED_TEXT_ERROR_I18N_KEYS[result.error]),
       }));
@@ -820,11 +828,25 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     dispatch(addDraftSelectedTextSnippet({ draftKey: currentSession.id, snippet }));
     logDetailDiagnostic(
       `added a selected text excerpt to the draft for session ${currentSession.id}; `
+      + `source type is ${sourceType}, source is ${sourceLabel}; `
       + `${result.snippets.length} excerpts now contain ${result.snippets.reduce((total, item) => total + item.text.length, 0)} characters`,
     );
-    closeSelectedTextAction({ clearSelection: true });
     promptInputRef.current?.focus();
-  }, [closeSelectedTextAction, currentSession?.id, dispatch, selectedDraftSnippets, selectedTextAction]);
+  }, [currentSession?.id, dispatch, selectedDraftSnippets]);
+
+  const handleAddSelectedText = useCallback(() => {
+    if (!selectedTextAction) return;
+    addSelectedTextSnippetToDraft({
+      id: `selected-text-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      text: selectedTextAction.text,
+      sourceMessageId: selectedTextAction.sourceMessageId,
+      sourceMessageType: CoworkSelectedTextSource.AssistantMessage,
+      sourceId: selectedTextAction.sourceMessageId,
+      sourceType: CoworkSelectedTextSource.AssistantMessage,
+      createdAt: Date.now(),
+    });
+    closeSelectedTextAction({ clearSelection: true });
+  }, [addSelectedTextSnippetToDraft, closeSelectedTextAction, selectedTextAction]);
 
   const handleLocateSelectedText = useCallback((sourceMessageId: string) => {
     const container = scrollContainerRef.current;
@@ -3001,6 +3023,8 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
               onOpenFileListTab={handleOpenArtifactFileListTab}
               onOpenBrowserTab={handleOpenArtifactBrowserTab}
               onBrowserAnnotationCaptured={handleBrowserAnnotationCaptured}
+              onAddSelectedText={addSelectedTextSnippetToDraft}
+              selectedTextEnabled={!remoteManaged}
             />
           </ArtifactPanelErrorBoundary>
         </div>

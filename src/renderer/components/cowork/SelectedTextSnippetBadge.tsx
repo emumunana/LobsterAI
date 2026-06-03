@@ -1,6 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
 
-import type { CoworkSelectedTextSnippet } from '../../../shared/cowork/selectedText';
+import {
+  type CoworkSelectedTextSnippet,
+  CoworkSelectedTextSource,
+} from '../../../shared/cowork/selectedText';
 import { i18nService } from '../../services/i18n';
 import InformationCircleIcon from '../icons/InformationCircleIcon';
 import XMarkIcon from '../icons/XMarkIcon';
@@ -34,6 +37,17 @@ const SelectedTextSnippetBadge: React.FC<SelectedTextSnippetBadgeProps> = ({
 
   if (snippets.length === 0) return null;
   const popoverAlignmentClass = align === 'right' ? 'right-0' : 'left-0';
+  const getSourceLabel = (snippet: CoworkSelectedTextSnippet): string => {
+    const sourceType = snippet.sourceType ?? snippet.sourceMessageType;
+    if (snippet.sourceTitle?.trim()) return snippet.sourceTitle.trim();
+    if (sourceType === CoworkSelectedTextSource.ArtifactMarkdown) {
+      return i18nService.t('coworkSelectedTextArtifactMarkdownSource');
+    }
+    if (sourceType === CoworkSelectedTextSource.ArtifactText) {
+      return i18nService.t('coworkSelectedTextArtifactTextSource');
+    }
+    return '';
+  };
 
   return (
     <div ref={rootRef} className="relative inline-flex max-w-full">
@@ -52,12 +66,21 @@ const SelectedTextSnippetBadge: React.FC<SelectedTextSnippetBadgeProps> = ({
               <div key={snippet.id} className="flex items-start gap-1 rounded-lg bg-surface-raised px-2 py-1.5 text-xs text-secondary">
                 <button
                   type="button"
-                  onClick={() => onLocate?.(snippet.sourceMessageId)}
-                  disabled={!onLocate}
-                  className="min-w-0 flex-1 truncate text-left disabled:cursor-default"
-                  title={snippet.text}
+                  onClick={() => {
+                    if (snippet.sourceMessageId) {
+                      onLocate?.(snippet.sourceMessageId);
+                    }
+                  }}
+                  disabled={!onLocate || !snippet.sourceMessageId}
+                  className="min-w-0 flex-1 text-left disabled:cursor-default"
+                  title={[getSourceLabel(snippet), snippet.text].filter(Boolean).join('\n')}
                 >
-                  {snippet.text}
+                  {getSourceLabel(snippet) && (
+                    <div className="mb-0.5 truncate text-[11px] font-medium text-foreground">
+                      {getSourceLabel(snippet)}
+                    </div>
+                  )}
+                  <div className="truncate">{snippet.text}</div>
                 </button>
                 {onRemove && (
                   <button

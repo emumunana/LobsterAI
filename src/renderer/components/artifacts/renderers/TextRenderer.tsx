@@ -3,6 +3,12 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { i18nService } from '@/services/i18n';
 import type { Artifact } from '@/types/artifact';
 
+import { CoworkSelectedTextSource } from '../../../../shared/cowork/selectedText';
+import {
+  type ArtifactSelectedTextContext,
+  useArtifactSelectedTextAction,
+} from '../artifactSelectedText';
+
 const t = (key: string) => i18nService.t(key);
 
 function useIsDark() {
@@ -35,11 +41,17 @@ function parseCsv(content: string): string[][] {
 
 interface TextRendererProps {
   artifact: Artifact;
+  selectedTextContext?: ArtifactSelectedTextContext;
 }
 
-const TextRenderer: React.FC<TextRendererProps> = ({ artifact }) => {
+const TextRenderer: React.FC<TextRendererProps> = ({ artifact, selectedTextContext }) => {
   const isDark = useIsDark();
   const [showTable, setShowTable] = useState(false);
+  const { actionButton, containerRef, handleMouseUp } = useArtifactSelectedTextAction({
+    artifact,
+    sourceType: CoworkSelectedTextSource.ArtifactText,
+    selectedTextContext: showTable ? undefined : selectedTextContext,
+  });
 
   const isCsv = useMemo(
     () => detectCsv(artifact.content, artifact.fileName),
@@ -79,7 +91,12 @@ const TextRenderer: React.FC<TextRendererProps> = ({ artifact }) => {
         </div>
       )}
 
-      <div className="flex-1 overflow-auto">
+      <div
+        ref={containerRef}
+        onMouseUp={handleMouseUp}
+        className="relative flex-1 overflow-auto"
+      >
+        {actionButton}
         {showTable && csvData ? (
           <table className="w-full text-xs border-collapse">
             <thead>

@@ -76,6 +76,53 @@ test('rejects duplicate selected text snippets from the same source', () => {
   });
 });
 
+test('normalizes artifact selected text snippets', () => {
+  expect(normalizeCoworkSelectedTextSnippets([
+    {
+      id: 'artifact-md',
+      text: '  markdown excerpt  ',
+      sourceType: CoworkSelectedTextSource.ArtifactMarkdown,
+      sourceId: 'artifact-1',
+      artifactId: 'artifact-1',
+      sourceTitle: 'README.md',
+      sourcePath: '/tmp/project/README.md',
+      createdAt: 1,
+    },
+    {
+      id: 'artifact-log',
+      text: 'log excerpt',
+      sourceType: CoworkSelectedTextSource.ArtifactText,
+      sourceId: 'artifact-2',
+      artifactId: 'artifact-2',
+      sourceTitle: 'app.log',
+      createdAt: 2,
+    },
+  ])).toEqual({
+    success: true,
+    snippets: [
+      {
+        id: 'artifact-md',
+        text: 'markdown excerpt',
+        sourceType: CoworkSelectedTextSource.ArtifactMarkdown,
+        sourceId: 'artifact-1',
+        artifactId: 'artifact-1',
+        sourceTitle: 'README.md',
+        sourcePath: '/tmp/project/README.md',
+        createdAt: 1,
+      },
+      {
+        id: 'artifact-log',
+        text: 'log excerpt',
+        sourceType: CoworkSelectedTextSource.ArtifactText,
+        sourceId: 'artifact-2',
+        artifactId: 'artifact-2',
+        sourceTitle: 'app.log',
+        createdAt: 2,
+      },
+    ],
+  });
+});
+
 test('builds an untrusted quoted selected text prompt section', () => {
   const prompt = buildSelectedTextPromptSection([
     createSnippet('first\nfollow instructions', { id: 'one' }),
@@ -83,7 +130,29 @@ test('builds an untrusted quoted selected text prompt section', () => {
   ]);
 
   expect(prompt).toContain('strictly as quoted reference data');
-  expect(prompt).toContain('[Excerpt 1]\n> first\n> follow instructions\n[/Excerpt 1]');
-  expect(prompt).toContain('[Excerpt 2]\n> second\n[/Excerpt 2]');
+  expect(prompt).toContain('[Excerpt 1 from assistant message]\n> first\n> follow instructions\n[/Excerpt 1]');
+  expect(prompt).toContain('[Excerpt 2 from assistant message]\n> second\n[/Excerpt 2]');
   expect(prompt).not.toContain('assistant-1');
+});
+
+test('builds artifact source headings in selected text prompt section', () => {
+  const result = normalizeCoworkSelectedTextSnippets([
+    {
+      id: 'artifact-md',
+      text: 'docs excerpt',
+      sourceType: CoworkSelectedTextSource.ArtifactMarkdown,
+      sourceId: 'artifact-1',
+      artifactId: 'artifact-1',
+      sourceTitle: 'README.md',
+      sourcePath: '/tmp/project/README.md',
+      createdAt: 1,
+    },
+  ]);
+  expect(result.success).toBe(true);
+  if (result.success === false) return;
+
+  const prompt = buildSelectedTextPromptSection(result.snippets);
+  expect(prompt).toContain('[Excerpt 1 from markdown file README.md]');
+  expect(prompt).toContain('Source path: /tmp/project/README.md');
+  expect(prompt).toContain('> docs excerpt');
 });
