@@ -44,8 +44,17 @@ const PORTAL_BASE_PROD = 'https://c.youdao.com/dict/hardware/octopus/lobsterai-p
 
 const getPortalBase = () => isTestModeEnabled() ? PORTAL_BASE_TEST : PORTAL_BASE_PROD;
 
+export const PortalPricingKeyfrom = {
+  HtmlShare: 'html_share',
+} as const;
+
+export type PortalPricingKeyfrom =
+  (typeof PortalPricingKeyfrom)[keyof typeof PortalPricingKeyfrom];
+
 export const getPortalLoginUrl = () => `${getPortalBase()}/login`;
-export const getPortalPricingUrl = () => `${getPortalBase()}/pricing`;
+export const getPortalPricingUrl = (keyfrom?: PortalPricingKeyfrom) => (
+  `${getPortalBase()}/pricing${keyfrom ? `?keyfrom=${encodeURIComponent(keyfrom)}` : ''}`
+);
 export const getPortalProfileUrl = () => `${getPortalBase()}/profile`;
 export const getPortalRechargeUrl = () => `${getPortalBase()}/`;
 export const getPortalInvitationUrl = () => `${getPortalBase()}/invitation`;

@@ -11,7 +11,7 @@ import { createPortal } from 'react-dom';
 import { useDispatch, useSelector } from 'react-redux';
 
 import { authService } from '@/services/auth';
-import { getPortalPricingUrl, isTestModeEnabled } from '@/services/endpoints';
+import { getPortalPricingUrl, PortalPricingKeyfrom } from '@/services/endpoints';
 import { i18nService } from '@/services/i18n';
 import type { RootState } from '@/store';
 import {
@@ -78,6 +78,24 @@ const HtmlShareDialogKind = {
 
 type HtmlShareDialogKind = (typeof HtmlShareDialogKind)[keyof typeof HtmlShareDialogKind];
 
+const HtmlShareContentUpdateStatus = {
+  Updating: 'updating',
+  Complete: 'complete',
+  Failed: 'failed',
+} as const;
+
+type HtmlShareContentUpdateStatus =
+  (typeof HtmlShareContentUpdateStatus)[keyof typeof HtmlShareContentUpdateStatus];
+
+const HtmlShareCopyStatus = {
+  Idle: 'idle',
+  Copied: 'copied',
+  Failed: 'failed',
+} as const;
+
+type HtmlShareCopyStatus =
+  (typeof HtmlShareCopyStatus)[keyof typeof HtmlShareCopyStatus];
+
 const HtmlSharePendingSource = {
   HtmlFile: 'htmlFile',
 } as const;
@@ -101,6 +119,7 @@ interface HtmlShareDialogState {
   status?: HtmlShareStatusValue;
   targetStatus?: HtmlShareConfigurableStatus;
   statusError?: string;
+  contentUpdateStatus?: HtmlShareContentUpdateStatus;
 }
 
 interface ExistingHtmlShareInfo {
@@ -141,32 +160,6 @@ function getConfigurableHtmlShareStatus(
 ): HtmlShareConfigurableStatus | undefined {
   if (status === HtmlShareStatus.Failed) return undefined;
   return status === HtmlShareStatus.Disabled ? HtmlShareStatus.Disabled : HtmlShareStatus.Live;
-}
-
-function getHtmlShareStatusLabel(status?: HtmlShareStatusValue): string {
-  if (status === HtmlShareStatus.Disabled) return t('htmlShareStatusDisabled');
-  if (status === HtmlShareStatus.Failed) return t('htmlShareStatusFailed');
-  return t('htmlShareStatusLive');
-}
-
-function getHtmlShareResultStatusLabel(status?: HtmlShareStatusValue): string {
-  if (status === HtmlShareStatus.Disabled) return t('htmlShareResultStatusDisabled');
-  if (status === HtmlShareStatus.Failed) return t('htmlShareResultStatusFailed');
-  return '';
-}
-
-function getHtmlShareResultStatusClassName(status?: HtmlShareStatusValue): string {
-  if (status === HtmlShareStatus.Disabled) {
-    return 'bg-surface text-muted';
-  }
-  if (status === HtmlShareStatus.Failed) {
-    return 'bg-red-500/10 text-red-500 dark:text-red-400';
-  }
-  return '';
-}
-
-function shouldShowHtmlShareResultStatus(status?: HtmlShareStatusValue): boolean {
-  return status === HtmlShareStatus.Disabled || status === HtmlShareStatus.Failed;
 }
 
 function getHtmlShareFailureMessage(
@@ -347,7 +340,8 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
     useState<HtmlSharePendingRequest | null>(null);
   const [htmlShareLookup, setHtmlShareLookup] = useState<HtmlShareLookupState | null>(null);
   const [isHtmlShareStatusUpdating, setIsHtmlShareStatusUpdating] = useState(false);
-  const [isHtmlShareEnabled, setIsHtmlShareEnabled] = useState(isTestModeEnabled);
+  const [htmlShareCopyStatus, setHtmlShareCopyStatus] =
+    useState<HtmlShareCopyStatus>(HtmlShareCopyStatus.Idle);
   const [isArtifactActionsMenuOpen, setIsArtifactActionsMenuOpen] = useState(false);
   const fileListDrawerRef = useRef<HTMLDivElement>(null);
   const fileListButtonRef = useRef<HTMLButtonElement>(null);
@@ -355,6 +349,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
   const artifactActionsMenuButtonRef = useRef<HTMLButtonElement>(null);
   const fileListDrawerAnimationFrameRef = useRef<number | undefined>(undefined);
   const fileListDrawerCloseTimeoutRef = useRef<number | undefined>(undefined);
+  const htmlShareCopyStatusTimerRef = useRef<number | undefined>(undefined);
 
   const previewableArtifacts = artifacts.filter(a => PREVIEWABLE_ARTIFACT_TYPES.has(a.type));
   const artifactsById = useMemo(
@@ -409,12 +404,12 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
     ? 'p-1 rounded bg-primary/10 text-primary transition-colors hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-50'
     : 'p-1 rounded text-secondary transition-colors hover:bg-surface hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50';
   const canShareHtmlArtifact = Boolean(
-    isHtmlShareEnabled &&
-      selectedArtifact?.type === ArtifactTypeValue.Html &&
+    selectedArtifact?.type === ArtifactTypeValue.Html &&
       selectedHtmlFilePath,
   );
   const canUseHtmlShareDialogLink = Boolean(
     htmlShareDialog?.url &&
+      !isHtmlShareStatusUpdating &&
       htmlShareDialog.status !== HtmlShareStatus.Disabled &&
       htmlShareDialog.status !== HtmlShareStatus.Failed,
   );
@@ -576,34 +571,17 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
       if (fileListDrawerCloseTimeoutRef.current !== undefined) {
         window.clearTimeout(fileListDrawerCloseTimeoutRef.current);
       }
+      if (htmlShareCopyStatusTimerRef.current !== undefined) {
+        window.clearTimeout(htmlShareCopyStatusTimerRef.current);
+      }
       document.body.style.cursor = previousBodyCursor.current;
       document.body.classList.remove('select-none');
     };
   }, []);
 
   useEffect(() => {
-    const refreshHtmlShareAvailability = () => {
-      const nextIsEnabled = isTestModeEnabled();
-      setIsHtmlShareEnabled(nextIsEnabled);
-      if (!nextIsEnabled) {
-        setHtmlShareDialog(null);
-        setHtmlSharePendingRequest(null);
-        setHtmlShareLookup(null);
-        setHtmlSharePhase(HtmlSharePhase.Idle);
-        setIsHtmlShareStatusUpdating(false);
-      }
-    };
-
-    window.addEventListener('config-updated', refreshHtmlShareAvailability);
-    return () => {
-      window.removeEventListener('config-updated', refreshHtmlShareAvailability);
-    };
-  }, []);
-
-  useEffect(() => {
     if (
       !selectedHtmlFilePath ||
-      !isHtmlShareEnabled ||
       !authState.isLoggedIn ||
       authState.quota?.subscriptionStatus !== 'active'
     ) {
@@ -660,9 +638,16 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
   }, [
     authState.isLoggedIn,
     authState.quota?.subscriptionStatus,
-    isHtmlShareEnabled,
     selectedHtmlFilePath,
   ]);
+
+  useEffect(() => {
+    if (htmlShareCopyStatusTimerRef.current !== undefined) {
+      window.clearTimeout(htmlShareCopyStatusTimerRef.current);
+      htmlShareCopyStatusTimerRef.current = undefined;
+    }
+    setHtmlShareCopyStatus(HtmlShareCopyStatus.Idle);
+  }, [htmlShareDialog?.shareId, htmlShareDialog?.url]);
 
   useEffect(() => {
     if (selectedArtifact) return;
@@ -872,13 +857,24 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
   }, [selectedArtifact]);
 
   const openSubscriptionPage = useCallback(() => {
-    window.electron?.shell?.openExternal(getPortalPricingUrl());
+    window.electron?.shell?.openExternal(getPortalPricingUrl(PortalPricingKeyfrom.HtmlShare));
     setHtmlShareDialog(null);
   }, []);
 
   const formatShareClipboardText = useCallback((url: string, shareCode?: string): string => {
     if (!shareCode) return url;
     return `${t('htmlShareLink')}: ${url}\n${t('htmlShareCode')}: ${shareCode}`;
+  }, []);
+
+  const showHtmlShareCopyStatus = useCallback((status: HtmlShareCopyStatus) => {
+    if (htmlShareCopyStatusTimerRef.current !== undefined) {
+      window.clearTimeout(htmlShareCopyStatusTimerRef.current);
+    }
+    setHtmlShareCopyStatus(status);
+    htmlShareCopyStatusTimerRef.current = window.setTimeout(() => {
+      setHtmlShareCopyStatus(HtmlShareCopyStatus.Idle);
+      htmlShareCopyStatusTimerRef.current = undefined;
+    }, 2200);
   }, []);
 
   const ensureHtmlShareAllowed = useCallback(async (): Promise<boolean> => {
@@ -913,16 +909,15 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
   const handleCopyShareLink = useCallback(
     async (url?: string, shareCode?: string) => {
       if (!url) return;
-      await navigator.clipboard.writeText(formatShareClipboardText(url, shareCode));
-      window.dispatchEvent(new CustomEvent('app:showToast', { detail: t('copied') }));
+      try {
+        await navigator.clipboard.writeText(formatShareClipboardText(url, shareCode));
+        showHtmlShareCopyStatus(HtmlShareCopyStatus.Copied);
+      } catch {
+        showHtmlShareCopyStatus(HtmlShareCopyStatus.Failed);
+      }
     },
-    [formatShareClipboardText],
+    [formatShareClipboardText, showHtmlShareCopyStatus],
   );
-
-  const handleOpenShareLink = useCallback((url?: string) => {
-    if (!url) return;
-    window.electron?.shell?.openExternal(url);
-  }, []);
 
   const openExistingHtmlShareDialog = useCallback(
     (
@@ -934,7 +929,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
       setHtmlShareDialog({
         kind: HtmlShareDialogKind.Existing,
         title: t('htmlShareManageDialogTitle'),
-        message: t('htmlShareExistingShareMessage'),
+        message: t('htmlShareViewHint'),
         shareId: share.shareId,
         url: share.url,
         shareCode: share.shareCode,
@@ -965,7 +960,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
   }, []);
 
   const handleHtmlShareResult = useCallback(
-    async (
+    (
       result: Awaited<
         ReturnType<NonNullable<typeof window.electron>['htmlShare']['createFromHtmlFile']>
       >,
@@ -984,9 +979,6 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
         throw new Error(getHtmlShareFailureMessage(result));
       }
       setHtmlSharePhase(HtmlSharePhase.Live);
-      if (result.status !== HtmlShareStatus.Disabled && result.status !== HtmlShareStatus.Failed) {
-        await handleCopyShareLink(result.url, result.shareCode);
-      }
       setHtmlShareDialog({
         kind: HtmlShareDialogKind.Result,
         title:
@@ -1000,15 +992,15 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
           : action === 'update'
             ? result.status === HtmlShareStatus.Disabled
               ? t('htmlShareUpdatedClosedMessage')
-              : t('htmlShareUpdatedMessage')
-            : t('htmlShareSuccessMessage'),
+              : t('htmlShareUpdateComplete')
+            : t('htmlShareViewHint'),
         url: result.url,
         shareCode: result.shareCode,
         shareCodeUnavailable: result.shareCodeUnavailable,
         status: result.status,
       });
     },
-    [handleCopyShareLink],
+    [],
   );
 
   const createHtmlShare = useCallback(async (request: HtmlSharePendingRequest) => {
@@ -1047,7 +1039,20 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
     const request = htmlSharePendingRequest;
     const shareId = htmlShareDialog.shareId;
     const currentStatus = htmlShareDialog.status;
-    setHtmlShareDialog(null);
+    setHtmlShareDialog(previous => {
+      if (
+        !previous ||
+        previous.kind !== HtmlShareDialogKind.Existing ||
+        previous.shareId !== shareId
+      ) {
+        return previous;
+      }
+      return {
+        ...previous,
+        contentUpdateStatus: HtmlShareContentUpdateStatus.Updating,
+        statusError: undefined,
+      };
+    });
     try {
       setHtmlSharePhase(HtmlSharePhase.Packing);
       setHtmlSharePhase(HtmlSharePhase.Uploading);
@@ -1059,18 +1064,55 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
         title: request.title,
         currentStatus,
       });
-      await handleHtmlShareResult(result, 'update');
+      if (!result?.success || !result.url) {
+        throw new Error(getHtmlShareFailureMessage(result));
+      }
+      const resultStatus = getConfigurableHtmlShareStatus(result.status) ?? HtmlShareStatus.Live;
       rememberHtmlShare(request.filePath, result);
+      setHtmlSharePhase(HtmlSharePhase.Live);
+      setHtmlShareDialog(previous => {
+        if (
+          !previous ||
+          previous.kind !== HtmlShareDialogKind.Existing ||
+          previous.shareId !== shareId
+        ) {
+          return previous;
+        }
+        return {
+          ...previous,
+          message: t('htmlShareViewHint'),
+          url: result.url,
+          shareCode: result.shareCode,
+          shareCodeUnavailable: result.shareCodeUnavailable,
+          status: resultStatus,
+          targetStatus: resultStatus,
+          statusError: undefined,
+          contentUpdateStatus: HtmlShareContentUpdateStatus.Complete,
+        };
+      });
     } catch (error) {
       setHtmlSharePhase(HtmlSharePhase.Failed);
-      setHtmlShareDialog({
-        kind: HtmlShareDialogKind.Result,
-        title: t('htmlShareFailed'),
-        message: error instanceof Error ? error.message : t('htmlShareFailed'),
+      const message = error instanceof Error ? error.message : t('htmlShareFailed');
+      setHtmlShareDialog(previous => {
+        if (
+          !previous ||
+          previous.kind !== HtmlShareDialogKind.Existing ||
+          previous.shareId !== shareId
+        ) {
+          return {
+            kind: HtmlShareDialogKind.Result,
+            title: t('htmlShareFailed'),
+            message,
+          };
+        }
+        return {
+          ...previous,
+          statusError: message,
+          contentUpdateStatus: HtmlShareContentUpdateStatus.Failed,
+        };
       });
     }
   }, [
-    handleHtmlShareResult,
     htmlShareDialog?.shareId,
     htmlShareDialog?.status,
     htmlSharePendingRequest,
@@ -1093,6 +1135,7 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
     const previousStatus = htmlShareDialog.targetStatus;
     const nextStatus =
       previousStatus === HtmlShareStatus.Live ? HtmlShareStatus.Disabled : HtmlShareStatus.Live;
+    const request = htmlSharePendingRequest;
 
     setIsHtmlShareStatusUpdating(true);
     setHtmlShareDialog(previous => {
@@ -1118,12 +1161,31 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
       if (!result?.success || !result.url) {
         throw new Error(getHtmlShareFailureMessage(result));
       }
-      const resultStatus = getConfigurableHtmlShareStatus(result.status) ?? nextStatus;
-      if (htmlSharePendingRequest) {
-        rememberHtmlShare(htmlSharePendingRequest.filePath, {
-          ...result,
-          status: resultStatus,
-        });
+      let refreshedShare: ExistingHtmlShareInfo | null = null;
+      if (request) {
+        try {
+          const lookup = await window.electron?.htmlShare?.getByHtmlFile({
+            filePath: request.filePath,
+          });
+          if (lookup?.success) {
+            refreshedShare = getExistingHtmlShareInfo(lookup.share);
+          }
+        } catch {
+          refreshedShare = null;
+        }
+      }
+      const resultStatus =
+        getConfigurableHtmlShareStatus(refreshedShare?.status ?? result.status) ?? nextStatus;
+      const refreshedResult = {
+        shareId: refreshedShare?.shareId ?? result.shareId ?? shareId,
+        url: refreshedShare?.url ?? result.url,
+        shareCode: refreshedShare?.shareCode ?? result.shareCode,
+        shareCodeUnavailable:
+          refreshedShare?.shareCodeUnavailable ?? result.shareCodeUnavailable,
+        status: resultStatus,
+      };
+      if (request) {
+        rememberHtmlShare(request.filePath, refreshedResult);
       }
       setHtmlShareDialog(previous => {
         if (
@@ -1135,10 +1197,10 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
         }
         return {
           ...previous,
-          url: result.url ?? previous.url,
-          shareCode: result.shareCode ?? previous.shareCode,
+          url: refreshedResult.url ?? previous.url,
+          shareCode: refreshedResult.shareCode ?? previous.shareCode,
           shareCodeUnavailable:
-            result.shareCodeUnavailable ?? previous.shareCodeUnavailable,
+            refreshedResult.shareCodeUnavailable ?? previous.shareCodeUnavailable,
           status: resultStatus,
           targetStatus: resultStatus,
           statusError: undefined,
@@ -1174,7 +1236,6 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
 
   const handleShareHtmlArtifact = useCallback(async () => {
     if (
-      !isHtmlShareEnabled ||
       !selectedArtifact ||
       !selectedHtmlFilePath ||
       selectedArtifact.type !== ArtifactTypeValue.Html ||
@@ -1222,7 +1283,6 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
   }, [
     createHtmlShare,
     ensureHtmlShareAllowed,
-    isHtmlShareEnabled,
     isHtmlSharing,
     openExistingHtmlShareDialog,
     rememberHtmlShare,
@@ -1316,6 +1376,36 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
     setIsArtifactActionsMenuOpen(false);
     action();
   }, []);
+
+  const isHtmlShareLinkDialog = Boolean(
+    htmlShareDialog &&
+      (htmlShareDialog.kind === HtmlShareDialogKind.Existing ||
+        (htmlShareDialog.kind === HtmlShareDialogKind.Result && htmlShareDialog.url)),
+  );
+  const isHtmlShareExistingDialog =
+    htmlShareDialog?.kind === HtmlShareDialogKind.Existing;
+  const isHtmlShareStoppedDialog =
+    isHtmlShareExistingDialog &&
+    htmlShareDialog.targetStatus === HtmlShareStatus.Disabled;
+  const isHtmlShareFileUpdateDisabled = isHtmlSharing || isHtmlShareContentUpdateDisabled;
+  const isHtmlShareAvailabilityActionDisabled = Boolean(
+    !htmlShareDialog?.shareId ||
+      isHtmlShareStatusUpdating ||
+      !htmlShareDialog.targetStatus,
+  );
+  const htmlShareAvailabilityActionLabel =
+    htmlShareDialog?.targetStatus === HtmlShareStatus.Disabled
+      ? t('htmlShareStartSharing')
+      : t('htmlShareStopSharing');
+  const htmlShareAvailabilityActionClassName = isHtmlShareStoppedDialog
+    ? 'rounded-lg bg-primary px-5 py-2 text-base text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60'
+    : 'rounded-lg border border-border bg-background px-5 py-2 text-base text-secondary transition-colors hover:bg-surface hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60';
+  const htmlShareCopyButtonLabel =
+    htmlShareCopyStatus === HtmlShareCopyStatus.Failed
+      ? t('copyFailed')
+      : htmlShareCopyStatus === HtmlShareCopyStatus.Copied
+        ? t('copied')
+        : t('htmlShareCopyLink');
 
   return (
     <>
@@ -1551,218 +1641,153 @@ const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
       {htmlShareDialog &&
         createPortal(
           <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/35 px-4">
-            <div className="w-full max-w-[420px] rounded-lg border border-border bg-background p-4 shadow-2xl">
-              <div className="text-sm font-semibold text-foreground">{htmlShareDialog.title}</div>
-              {htmlShareDialog.kind === HtmlShareDialogKind.Existing ? (
-                <div className="mt-3 space-y-3">
-                  <div className="space-y-2">
-                    <div className="whitespace-pre-wrap break-words text-sm leading-6 text-secondary">
-                      {htmlShareDialog.message}
-                    </div>
-                    <div className="rounded-md border border-border bg-surface px-3 py-2">
-                      <div className="text-xs text-muted">{t('htmlShareLink')}</div>
-                      <div className="mt-1 break-words text-sm text-foreground">
-                        {htmlShareDialog.url}
-                      </div>
-                    </div>
-                  </div>
-                  {htmlShareDialog.shareCode && (
-                    <div className="rounded-md border border-border bg-surface px-3 py-2">
-                      <div className="text-xs text-muted">{t('htmlShareCode')}</div>
-                      <div className="mt-1 font-mono text-sm tracking-wider text-foreground">
-                        {htmlShareDialog.shareCode}
-                      </div>
-                    </div>
-                  )}
-                  {htmlShareDialog.shareCodeUnavailable && (
-                    <div className="text-xs leading-5 text-muted">
-                      {t('htmlShareCodeUnavailable')}
-                    </div>
-                  )}
-                  {htmlShareDialog.targetStatus && (
-                    <div className="rounded-md border border-border bg-surface px-3 py-2">
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="min-w-0">
-                          <div className="text-xs text-muted">
-                            {t('htmlShareAvailability')}
-                          </div>
-                          <div className="mt-1 text-sm font-medium text-foreground">
-                            {isHtmlShareStatusUpdating
-                              ? t('htmlShareStatusUpdating')
-                              : getHtmlShareStatusLabel(htmlShareDialog.targetStatus)}
-                          </div>
-                          <div className="mt-1 text-xs leading-5 text-muted">
-                            {htmlShareDialog.targetStatus === HtmlShareStatus.Live
-                              ? t('htmlShareAvailabilityOpenHint')
-                              : t('htmlShareAvailabilityClosedHint')}
-                          </div>
-                          {htmlShareDialog.statusError && (
-                            <div className="mt-1 text-xs leading-5 text-red-500">
-                              {htmlShareDialog.statusError}
-                            </div>
-                          )}
-                        </div>
-                        <button
-                          type="button"
-                          role="switch"
-                          aria-checked={htmlShareDialog.targetStatus === HtmlShareStatus.Live}
-                          aria-busy={isHtmlShareStatusUpdating}
-                          aria-label={t('htmlShareAvailability')}
-                          onClick={toggleHtmlShareTargetStatus}
-                          disabled={isHtmlShareStatusUpdating}
-                          className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors ${
-                            htmlShareDialog.targetStatus === HtmlShareStatus.Live
-                              ? 'bg-primary'
-                              : 'bg-gray-300 dark:bg-gray-600'
-                          } ${
-                            isHtmlShareStatusUpdating
-                              ? 'cursor-not-allowed opacity-70'
-                              : ''
-                          }`}
-                        >
-                          <span
-                            className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                              htmlShareDialog.targetStatus === HtmlShareStatus.Live
-                                ? 'translate-x-6'
-                                : 'translate-x-1'
-                            }`}
-                          />
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <>
-                  <div className="mt-3 space-y-3">
-                    <div className="whitespace-pre-wrap break-words text-sm leading-6 text-secondary">
-                      {htmlShareDialog.message}
-                    </div>
-                    {htmlShareDialog.url && (
-                      <div className="rounded-md border border-border bg-surface px-3 py-2">
-                        <div className="flex items-center justify-between gap-2">
-                          <div className="text-xs font-medium text-muted">
-                            {t('htmlShareLink')}
-                          </div>
-                          {shouldShowHtmlShareResultStatus(htmlShareDialog.status) && (
-                            <span
-                              className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ${getHtmlShareResultStatusClassName(htmlShareDialog.status)}`}
-                            >
-                              {getHtmlShareResultStatusLabel(htmlShareDialog.status)}
-                            </span>
-                          )}
-                        </div>
-                        <div
-                          className="mt-1 truncate text-sm leading-5 text-foreground"
-                          title={htmlShareDialog.url}
-                        >
-                          {htmlShareDialog.url}
-                        </div>
-                      </div>
-                    )}
-                    {htmlShareDialog.shareCode && (
-                      <div className="rounded-md border border-border bg-surface px-3 py-2">
-                        <div className="text-xs font-medium text-muted">
-                          {t('htmlShareCode')}
-                        </div>
-                        <div className="mt-1 font-mono text-base font-semibold tracking-wider text-foreground">
-                          {htmlShareDialog.shareCode}
-                        </div>
-                      </div>
-                    )}
-                    {htmlShareDialog.shareCodeUnavailable &&
-                      htmlShareDialog.message !== t('htmlShareCodeUnavailable') && (
-                        <div className="text-xs leading-5 text-muted">
-                          {t('htmlShareCodeUnavailable')}
-                        </div>
-                      )}
-                  </div>
-                </>
-              )}
-              <div className="mt-4 flex flex-wrap justify-end gap-2">
+            {isHtmlShareLinkDialog ? (
+              <div className="relative w-full max-w-[420px] rounded-2xl bg-background px-7 pb-6 pt-6 shadow-2xl">
                 <button
                   type="button"
                   onClick={() => {
                     setHtmlShareDialog(null);
                     setHtmlSharePendingRequest(null);
                   }}
-                  className="rounded-md border border-border px-3 py-1.5 text-sm text-secondary transition-colors hover:bg-surface hover:text-foreground"
+                  className="absolute right-6 top-6 rounded-md p-1 text-muted transition-colors hover:bg-surface hover:text-foreground"
+                  aria-label={t('close')}
+                  title={t('close')}
                 >
-                  {htmlShareDialog.kind === HtmlShareDialogKind.Result ||
-                  htmlShareDialog.kind === HtmlShareDialogKind.Existing
-                    ? t('close')
-                    : t('cancel')}
+                  <CloseIcon />
                 </button>
-                {htmlShareDialog.kind === HtmlShareDialogKind.Subscription ? (
-                  <button
-                    type="button"
-                    onClick={openSubscriptionPage}
-                    className="rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground transition-colors hover:bg-primary/90"
-                  >
-                    {t('htmlShareOpenSubscription')}
-                  </button>
-                ) : htmlShareDialog.kind === HtmlShareDialogKind.Existing ? (
-                  <>
-                    {canUseHtmlShareDialogLink && (
-                      <button
-                        type="button"
-                        onClick={() =>
-                          handleCopyShareLink(htmlShareDialog.url, htmlShareDialog.shareCode)
-                        }
-                        className="rounded-md border border-border px-3 py-1.5 text-sm text-secondary transition-colors hover:bg-surface hover:text-foreground"
-                      >
-                        {htmlShareDialog.shareCode
-                          ? t('htmlShareCopyAll')
-                          : t('htmlShareCopyLink')}
-                      </button>
+                <div className="pr-8 text-xl font-semibold leading-7 text-foreground">
+                  {t('htmlShare')}
+                </div>
+                {isHtmlShareStoppedDialog ? (
+                  <div className="mt-2 text-sm font-medium leading-5 text-red-500">
+                    {t('htmlShareStoppedNotice')}
+                  </div>
+                ) : (
+                  <div className="mt-3 text-sm leading-5 text-muted">
+                    {htmlShareDialog.message}
+                  </div>
+                )}
+
+                {htmlShareDialog.url && (
+                  <div className="mt-5 rounded-sm border border-[#edf0f4] bg-[#f5f6f8] px-4 py-4 dark:border-white/10 dark:bg-white/5">
+                    <div className="min-w-0 break-words text-base leading-6 text-foreground">
+                      {htmlShareDialog.url}
+                    </div>
+                    {htmlShareDialog.shareCode && (
+                      <div className="mt-4 text-base leading-6 text-foreground">
+                        <span className="text-muted">{t('htmlShareCode')}</span>
+                        <span className="ml-2 font-medium">{htmlShareDialog.shareCode}</span>
+                      </div>
                     )}
-                    {canUseHtmlShareDialogLink && (
-                      <button
-                        type="button"
-                        onClick={() => handleOpenShareLink(htmlShareDialog.url)}
-                        className="rounded-md border border-border px-3 py-1.5 text-sm text-secondary transition-colors hover:bg-surface hover:text-foreground"
-                      >
-                        {t('htmlShareOpenLink')}
-                      </button>
-                    )}
+                  </div>
+                )}
+
+                {htmlShareDialog.shareCodeUnavailable && (
+                  <div className="mt-3 text-xs leading-5 text-muted">
+                    {t('htmlShareCodeUnavailable')}
+                  </div>
+                )}
+                {isHtmlShareExistingDialog && htmlShareDialog.statusError && (
+                  <div className="mt-3 text-xs leading-5 text-red-500">
+                    {htmlShareDialog.statusError}
+                  </div>
+                )}
+
+                {isHtmlShareExistingDialog && (
+                  <div className="mt-5 flex items-center gap-2">
+                    <span className="text-base font-medium text-foreground">
+                      {t('htmlShareUpdateFile')}
+                    </span>
                     <button
                       type="button"
                       onClick={updateHtmlShare}
-                      disabled={isHtmlShareContentUpdateDisabled}
+                      disabled={isHtmlShareFileUpdateDisabled}
                       title={
                         htmlShareDialog.targetStatus === HtmlShareStatus.Disabled
                           ? t('htmlShareDisabledCannotUpdate')
                           : undefined
                       }
-                      className="rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
+                      className="inline-flex h-7 items-center gap-1 rounded-md border border-border px-2 text-sm text-secondary transition-colors hover:bg-surface hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
                     >
+                      <RefreshIcon />
                       {t('htmlShareUpdate')}
                     </button>
-                  </>
-                ) : canUseHtmlShareDialogLink ? (
-                  <>
+                    {htmlShareDialog.contentUpdateStatus &&
+                      htmlShareDialog.contentUpdateStatus !==
+                        HtmlShareContentUpdateStatus.Failed && (
+                        <span className="text-sm text-muted">
+                          {htmlShareDialog.contentUpdateStatus ===
+                          HtmlShareContentUpdateStatus.Updating
+                            ? t('htmlShareUpdatingFile')
+                            : t('htmlShareUpdateComplete')}
+                        </span>
+                      )}
+                  </div>
+                )}
+
+                <div className="mt-12 flex items-center justify-end gap-4">
+                  {isHtmlShareExistingDialog && (
+                    <button
+                      type="button"
+                      onClick={toggleHtmlShareTargetStatus}
+                      disabled={isHtmlShareAvailabilityActionDisabled}
+                      className={htmlShareAvailabilityActionClassName}
+                    >
+                      {isHtmlShareStatusUpdating
+                        ? t('htmlShareStatusUpdating')
+                        : htmlShareAvailabilityActionLabel}
+                    </button>
+                  )}
+                  {canUseHtmlShareDialogLink && (
                     <button
                       type="button"
                       onClick={() =>
-                        handleCopyShareLink(htmlShareDialog.url, htmlShareDialog.shareCode)
+                        handleCopyShareLink(htmlShareDialog.url)
                       }
-                      className="rounded-md border border-border px-3 py-1.5 text-sm text-secondary transition-colors hover:bg-surface hover:text-foreground"
+                      className={`w-28 rounded-lg px-5 py-2 text-base transition-colors ${
+                        htmlShareCopyStatus === HtmlShareCopyStatus.Failed
+                          ? 'bg-red-500 text-white hover:bg-red-500/90'
+                          : 'bg-primary text-primary-foreground hover:bg-primary/90'
+                      }`}
                     >
-                      {htmlShareDialog.shareCode
-                        ? t('htmlShareCopyAll')
-                        : t('htmlShareCopyLink')}
+                      {htmlShareCopyButtonLabel}
                     </button>
+                  )}
+                </div>
+              </div>
+              ) : (
+              <div className="w-full max-w-[420px] rounded-lg border border-border bg-background p-4 shadow-2xl">
+                <div className="text-sm font-semibold text-foreground">
+                  {htmlShareDialog.title}
+                </div>
+                <div className="mt-3 space-y-3">
+                  <div className="whitespace-pre-wrap break-words text-sm leading-6 text-secondary">
+                    {htmlShareDialog.message}
+                  </div>
+                </div>
+                <div className="mt-4 flex flex-wrap justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setHtmlShareDialog(null);
+                      setHtmlSharePendingRequest(null);
+                    }}
+                    className="rounded-md border border-border px-3 py-1.5 text-sm text-secondary transition-colors hover:bg-surface hover:text-foreground"
+                  >
+                    {htmlShareDialog.kind === HtmlShareDialogKind.Result ? t('close') : t('cancel')}
+                  </button>
+                  {htmlShareDialog.kind === HtmlShareDialogKind.Subscription && (
                     <button
                       type="button"
-                      onClick={() => handleOpenShareLink(htmlShareDialog.url)}
-                      className="rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground transition-colors hover:bg-primary/90"
+                      onClick={openSubscriptionPage}
+                      className="rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
                     >
-                      {t('htmlShareOpenLink')}
+                      {t('htmlShareOpenSubscription')}
                     </button>
-                  </>
-                ) : null}
+                  )}
+                </div>
               </div>
-            </div>
+            )}
           </div>,
           document.body,
         )}

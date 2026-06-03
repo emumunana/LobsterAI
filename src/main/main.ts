@@ -164,7 +164,6 @@ import {
   getPortalTasksUrl,
   getServerApiBaseUrl,
   getSkillStoreUrl,
-  isTestModeEnabled,
   refreshEndpointsTestMode,
 } from './libs/endpoints';
 import {
@@ -4167,9 +4166,6 @@ if (!gotTheLock) {
   ipcMain.handle(HtmlShareIpc.CreateFromHtmlFile, async (_event, input: unknown) => {
     let archivePath: string | undefined;
     try {
-      if (!isTestModeEnabled()) {
-        return { success: false, code: HtmlShareErrorCode.FeatureUnavailable };
-      }
       const options = sanitizeCreateFromHtmlFileInput(input);
       console.debug(
         `[HtmlShare] received HTML file share request for session ${options.sessionId} and artifact ${options.artifactId}`,
@@ -4226,9 +4222,6 @@ if (!gotTheLock) {
 
   ipcMain.handle(HtmlShareIpc.GetByHtmlFile, async (_event, input: unknown) => {
     try {
-      if (!isTestModeEnabled()) {
-        return { success: false, code: HtmlShareErrorCode.FeatureUnavailable };
-      }
       const options = sanitizeGetByHtmlFileInput(input);
       const clientSourceKey = buildHtmlShareClientSourceKey(options.filePath);
       return await getHtmlShareBySource(
@@ -4250,9 +4243,6 @@ if (!gotTheLock) {
   ipcMain.handle(HtmlShareIpc.UpdateFromHtmlFile, async (_event, input: unknown) => {
     let archivePath: string | undefined;
     try {
-      if (!isTestModeEnabled()) {
-        return { success: false, code: HtmlShareErrorCode.FeatureUnavailable };
-      }
       const options = sanitizeUpdateFromHtmlFileInput(input);
       if (options.currentStatus === HtmlShareStatus.Disabled) {
         return { success: false, code: HtmlShareErrorCode.DisabledCannotUpdate };
@@ -4301,9 +4291,6 @@ if (!gotTheLock) {
 
   ipcMain.handle(HtmlShareIpc.UpdateStatus, async (_event, input: unknown) => {
     try {
-      if (!isTestModeEnabled()) {
-        return { success: false, code: HtmlShareErrorCode.FeatureUnavailable };
-      }
       const options = sanitizeUpdateHtmlShareStatusInput(input);
       return await updateHtmlShareStatus(
         getServerApiBaseUrl(),
@@ -4323,9 +4310,6 @@ if (!gotTheLock) {
 
   ipcMain.handle(HtmlShareIpc.Get, async (_event, shareId: unknown) => {
     try {
-      if (!isTestModeEnabled()) {
-        return { success: false, code: HtmlShareErrorCode.FeatureUnavailable };
-      }
       const id = sanitizeHtmlShareString(shareId, 'shareId', 64);
       const resp = await fetchWithAuth(
         `${getServerApiBaseUrl()}/api/html-shares/${encodeURIComponent(id)}`,
@@ -4349,9 +4333,6 @@ if (!gotTheLock) {
 
   ipcMain.handle(HtmlShareIpc.Disable, async (_event, shareId: unknown) => {
     try {
-      if (!isTestModeEnabled()) {
-        return { success: false, code: HtmlShareErrorCode.FeatureUnavailable };
-      }
       const id = sanitizeHtmlShareString(shareId, 'shareId', 64);
       return await updateHtmlShareStatus(
         getServerApiBaseUrl(),
