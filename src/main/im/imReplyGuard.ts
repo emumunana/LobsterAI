@@ -33,6 +33,13 @@ const normalizeReplyText = (value: string): string => {
   return value.replace(/\s+/g, ' ').trim();
 };
 
+export const stripThinkingBlocks = (value: string): string => {
+  return value
+    .replace(/<think>[\s\S]*?<\/think>/gi, '')
+    .replace(/<thinking>[\s\S]*?<\/thinking>/gi, '')
+    .trim();
+};
+
 const getToolInputAction = (message: CoworkMessage): string => {
   const toolInput = message.metadata?.toolInput;
   if (!toolInput || typeof toolInput !== 'object') {
@@ -93,7 +100,7 @@ export function analyzeIMReply(messages: CoworkMessage[]): IMReplyAnalysis {
 
   for (const message of messages) {
     if (message.type === 'assistant' && message.content && !message.metadata?.isThinking) {
-      const normalized = message.content.trim();
+      const normalized = stripThinkingBlocks(message.content);
       if (normalized) {
         assistantParts.push(normalized);
       }

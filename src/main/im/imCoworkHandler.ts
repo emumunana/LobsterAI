@@ -12,7 +12,7 @@ import type { CoworkMessage,CoworkStore } from '../coworkStore';
 import { t } from '../i18n';
 import type { CoworkRuntime, PermissionRequest, PermissionResult } from '../libs/agentEngine/types';
 import { buildIMMediaInstruction } from './imMediaInstruction';
-import { analyzeIMReply, DEFAULT_IM_EMPTY_REPLY } from './imReplyGuard';
+import { analyzeIMReply, DEFAULT_IM_EMPTY_REPLY, stripThinkingBlocks } from './imReplyGuard';
 import {
   type IMScheduledTaskCreationResult,
   type IMScheduledTaskRequestDetector,
@@ -27,10 +27,20 @@ interface MessageAccumulator {
   resolve?: (text: string) => void;
   reject?: (error: Error) => void;
   timeoutId?: NodeJS.Timeout;
+  turnStartedAt?: number;
+  inboundMessageId?: string;
+  seenMessageIds?: Set<string>;
   backgroundDelivery?: {
     conversationId: string;
     platform: Platform;
   };
+}
+
+type CurrentTurnSelectionSource = 'store-by-id' | 'store-turn-boundary' | 'accumulator';
+
+interface CurrentTurnSelection {
+  messages: CoworkMessage[];
+  source: CurrentTurnSelectionSource;
 }
 
 interface PendingIMPermission {
@@ -563,6 +573,10 @@ export class IMCoworkHandler extends EventEmitter {
     console.log('[IMCoworkHandler:handleMessage] accumulator exists:', !!accumulator, 'backgroundDelivery:', !!accumulator?.backgroundDelivery);
     if (accumulator) {
       accumulator.messages.push(message);
+      accumulator.seenMessageIds?.add(message.id);
+      if (message.type === 'user' || message.type === 'system') {
+        accumulator.inboundMessageId = message.id;
+      }
     }
   }
 
@@ -617,6 +631,8 @@ export class IMCoworkHandler extends EventEmitter {
         resolve,
         reject,
         timeoutId,
+        turnStartedAt: Date.now(),
+        seenMessageIds: new Set<string>(),
       });
     });
   }
@@ -643,6 +659,8 @@ export class IMCoworkHandler extends EventEmitter {
     const nextAccumulator: MessageAccumulator = {
       messages: [],
       timeoutId,
+      turnStartedAt: Date.now(),
+      seenMessageIds: new Set<string>(),
       backgroundDelivery: {
         conversationId: conversation.conversationId,
         platform: conversation.platform,
@@ -846,12 +864,10 @@ export class IMCoworkHandler extends EventEmitter {
       return;
     }
 
-    // Use reconciled messages from the store (authoritative after reconcileWithHistory)
-    // instead of accumulator messages which may be stale streaming snapshots.
-    // Fall back to accumulator messages if the store has none (e.g. timeout path).
     const session = this.coworkStore.getSession(sessionId);
     const storeMessages = session?.messages ?? [];
-    const messages = storeMessages.length > 0 ? storeMessages : accumulator.messages;
+    const selection = this.selectCurrentTurnMessages(accumulator, storeMessages);
+    const messages = selection.messages;
 
     // For cron-triggered background deliveries (scheduled task executions),
     // skip the reminder guard — the assistant text IS the scheduled reminder
@@ -860,13 +876,17 @@ export class IMCoworkHandler extends EventEmitter {
       ? this.formatReplyRaw(messages)
       : this.formatReply(sessionId, messages);
 
-    console.log(`[IMCoworkHandler] 会话完成:`, JSON.stringify({
+    console.log('[IMCoworkHandler] session completed:', JSON.stringify({
       sessionId,
       messageCount: messages.length,
       replyLength: replyText.length,
-      reply: replyText,
       backgroundDelivery: accumulator.backgroundDelivery ?? null,
-      usedStoreMessages: storeMessages.length > 0,
+      replySelection: {
+        source: selection.source,
+        selectedMessages: messages.length,
+        storeMessages: storeMessages.length,
+        accumulatorMessages: accumulator.messages.length,
+      },
     }, null, 2));
 
     this.cleanupAccumulator(sessionId);
@@ -939,6 +959,139 @@ export class IMCoworkHandler extends EventEmitter {
     this.messageAccumulators.delete(sessionId);
   }
 
+  private selectCurrentTurnMessages(
+    accumulator: MessageAccumulator,
+    storeMessages: CoworkMessage[],
+  ): CurrentTurnSelection {
+    const byId = this.selectStoreMessagesByAccumulatorIds(accumulator, storeMessages);
+    if (byId.length > 0 && (byId.length === accumulator.messages.length || this.hasVisibleAssistantMessage(byId))) {
+      return { messages: byId, source: 'store-by-id' };
+    }
+
+    const byTurnBoundary = this.selectStoreMessagesByTurnBoundary(accumulator, storeMessages);
+    if (byTurnBoundary.length > 0) {
+      return { messages: byTurnBoundary, source: 'store-turn-boundary' };
+    }
+
+    return { messages: accumulator.messages, source: 'accumulator' };
+  }
+
+  private selectStoreMessagesByAccumulatorIds(
+    accumulator: MessageAccumulator,
+    storeMessages: CoworkMessage[],
+  ): CoworkMessage[] {
+    if (storeMessages.length === 0 || accumulator.messages.length === 0) {
+      return [];
+    }
+
+    const storeById = new Map(storeMessages.map((message) => [message.id, message]));
+    const selected: CoworkMessage[] = [];
+    const seen = new Set<string>();
+    for (const message of accumulator.messages) {
+      if (!message.id || seen.has(message.id)) continue;
+      const storeMessage = storeById.get(message.id);
+      if (!storeMessage) continue;
+      selected.push(storeMessage);
+      seen.add(message.id);
+    }
+    return selected;
+  }
+
+  private selectStoreMessagesByTurnBoundary(
+    accumulator: MessageAccumulator,
+    storeMessages: CoworkMessage[],
+  ): CoworkMessage[] {
+    const boundaryIndex = this.findCurrentTurnBoundary(accumulator, storeMessages);
+    if (boundaryIndex < 0) {
+      return [];
+    }
+
+    const scopedMessages = storeMessages.slice(boundaryIndex).filter((message) => (
+      message.type === 'user'
+      || message.type === 'system'
+      || message.type === 'assistant'
+      || message.type === 'tool_use'
+      || message.type === 'tool_result'
+    ));
+
+    return this.hasTurnOutputMessages(scopedMessages) ? scopedMessages : [];
+  }
+
+  private findCurrentTurnBoundary(
+    accumulator: MessageAccumulator,
+    storeMessages: CoworkMessage[],
+  ): number {
+    if (storeMessages.length === 0) {
+      return -1;
+    }
+
+    if (accumulator.inboundMessageId) {
+      const byId = storeMessages.findIndex((message) => message.id === accumulator.inboundMessageId);
+      if (byId >= 0) {
+        return byId;
+      }
+    }
+
+    const accumulatorBoundary = this.findLastInputMessage(accumulator.messages);
+    if (accumulatorBoundary) {
+      const boundaryContent = this.normalizeBoundaryContent(accumulatorBoundary.content);
+      for (let index = storeMessages.length - 1; index >= 0; index -= 1) {
+        const candidate = storeMessages[index];
+        if (!this.isInputMessage(candidate)) continue;
+        if (candidate.type !== accumulatorBoundary.type) continue;
+        if (this.normalizeBoundaryContent(candidate.content) === boundaryContent) {
+          return index;
+        }
+      }
+    }
+
+    if (typeof accumulator.turnStartedAt === 'number') {
+      for (let index = storeMessages.length - 1; index >= 0; index -= 1) {
+        const candidate = storeMessages[index];
+        if (!this.isInputMessage(candidate)) continue;
+        if (candidate.timestamp >= accumulator.turnStartedAt) {
+          return index;
+        }
+      }
+    }
+
+    return -1;
+  }
+
+  private findLastInputMessage(messages: CoworkMessage[]): CoworkMessage | null {
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index];
+      if (this.isInputMessage(message)) {
+        return message;
+      }
+    }
+    return null;
+  }
+
+  private isInputMessage(message: CoworkMessage): boolean {
+    return message.type === 'user' || message.type === 'system';
+  }
+
+  private hasTurnOutputMessages(messages: CoworkMessage[]): boolean {
+    return messages.some((message) => (
+      message.type === 'assistant'
+      || message.type === 'tool_use'
+      || message.type === 'tool_result'
+    ));
+  }
+
+  private hasVisibleAssistantMessage(messages: CoworkMessage[]): boolean {
+    return messages.some((message) => (
+      message.type === 'assistant'
+      && !message.metadata?.isThinking
+      && Boolean(stripThinkingBlocks(message.content))
+    ));
+  }
+
+  private normalizeBoundaryContent(content: string): string {
+    return content.replace(/\s+/g, ' ').trim();
+  }
+
   /**
    * Extract raw assistant text from accumulated messages, bypassing the
    * reminder-commitment guard.  Used for cron-triggered background deliveries
@@ -948,7 +1101,7 @@ export class IMCoworkHandler extends EventEmitter {
     const parts: string[] = [];
     for (const message of messages) {
       if (message.type === 'assistant' && message.content && !message.metadata?.isThinking) {
-        const text = message.content.trim();
+        const text = stripThinkingBlocks(message.content);
         if (text) parts.push(text);
       }
     }
