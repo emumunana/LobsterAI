@@ -114,6 +114,48 @@ describe('htmlSharePackager', () => {
     expect(entries).toEqual(['assets/fish.jpeg', 'assets/pond.css', 'pages/pond.html']);
   });
 
+  test('packages HTML files from cowork temp attachments without requiring referenced assets', async () => {
+    const root = await createTempRoot();
+    await writeFile(path.join(root, 'package.json'), '{"name":"fixture"}');
+    const attachmentDir = path.join(root, '.cowork-temp/attachments/manual');
+    await writeFile(
+      path.join(attachmentDir, 'plan.html'),
+      '<!doctype html><title>Plan</title><main>ready</main>',
+    );
+
+    const packaged = await packageHtmlFile(path.join(attachmentDir, 'plan.html'));
+    const entries = await getArchiveEntries(packaged.archivePath);
+
+    expect(packaged.rootDir).toBe(attachmentDir);
+    expect(packaged.entryFile).toBe('plan.html');
+    expect(entries).toEqual(['plan.html']);
+    expect(packaged.warnings).toEqual([]);
+  });
+
+  test('keeps cowork temp attachment shares scoped to the HTML directory', async () => {
+    const root = await createTempRoot();
+    await writeFile(path.join(root, 'package.json'), '{"name":"fixture"}');
+    const attachmentDir = path.join(root, '.cowork-temp/attachments/manual');
+    await writeFile(
+      path.join(attachmentDir, 'plan.html'),
+      [
+        '<!doctype html>',
+        '<link rel="stylesheet" href="plan.css">',
+        '<a href="../../secret.md">secret</a>',
+      ].join('\n'),
+    );
+    await writeFile(path.join(attachmentDir, 'plan.css'), 'body { color: #111; }');
+    await writeFile(path.join(root, '.cowork-temp/secret.md'), 'private');
+
+    const packaged = await packageHtmlFile(path.join(attachmentDir, 'plan.html'));
+    const entries = await getArchiveEntries(packaged.archivePath);
+
+    expect(entries).toEqual(['plan.css', 'plan.html']);
+    expect(packaged.warnings).toEqual([
+      'Blocked referenced resource: ../../secret.md',
+    ]);
+  });
+
   test('blocks sensitive workspace directories even when referenced', async () => {
     const root = await createTempRoot();
     await writeFile(

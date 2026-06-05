@@ -25,8 +25,10 @@ const EXCLUDED_DIRECTORY_NAMES = new Set([
   'coverage',
 ]);
 
+const COWORK_TEMP_DIRECTORY_NAME = '.cowork-temp';
+
 const SENSITIVE_DIRECTORY_NAMES = new Set([
-  '.cowork-temp',
+  COWORK_TEMP_DIRECTORY_NAME,
   '.openclaw',
   'memory',
 ]);
@@ -137,6 +139,15 @@ async function findShareBoundaryRoot(startDir: string): Promise<string> {
   }
 }
 
+function resolveHtmlFileShareRoot(resolvedFilePath: string, boundaryRoot: string): string {
+  const relative = path.relative(boundaryRoot, resolvedFilePath);
+  const relativeParts = relative.split(path.sep).filter(Boolean);
+  if (relativeParts.includes(COWORK_TEMP_DIRECTORY_NAME)) {
+    return path.dirname(resolvedFilePath);
+  }
+  return boundaryRoot;
+}
+
 function findCommonDirectory(filePaths: string[]): string {
   if (!filePaths.length) {
     throw new Error('Shared output did not contain any files.');
@@ -234,7 +245,8 @@ export async function packageHtmlFile(filePath: string): Promise<HtmlSharePackag
   }
 
   const boundaryRoot = await findShareBoundaryRoot(path.dirname(resolvedFilePath));
-  return packageStaticDirectory(boundaryRoot, path.relative(boundaryRoot, resolvedFilePath));
+  const shareRoot = resolveHtmlFileShareRoot(resolvedFilePath, boundaryRoot);
+  return packageStaticDirectory(shareRoot, path.relative(shareRoot, resolvedFilePath));
 }
 
 export async function packageStaticDirectory(rootDir: string, entryFile = 'index.html'): Promise<HtmlSharePackageResult> {
