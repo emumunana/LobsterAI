@@ -132,6 +132,7 @@ import {
 import { AppUpdateCoordinator, INSTALLATION_UUID_KEY } from './libs/appUpdateCoordinator';
 import { AuthCallbackRouter } from './libs/authCallbackRouter';
 import {
+  appendCallbackReturnTo,
   appendLoginParams,
   startAuthLocalCallback,
 } from './libs/authLocalCallbackServer';
@@ -2785,6 +2786,21 @@ if (!gotTheLock) {
     authCallbackRouter.handleDeepLink(url);
   };
 
+  const focusMainWindow = (reason: string) => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    try {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      if (!mainWindow.isVisible()) mainWindow.show();
+      if (!mainWindow.isFocused()) mainWindow.focus();
+      if (process.platform === 'darwin') {
+        app.focus({ steal: true });
+      }
+      console.log(`[Main] focused main window after ${reason}`);
+    } catch (error) {
+      console.warn(`[Main] failed to focus main window after ${reason}:`, error);
+    }
+  };
+
   ipcMain.on('log:fromRenderer', (_event, level: string, tag: string, message: string) => {
     const fn = level === 'error' ? console.error : level === 'warn' ? console.warn : console.log;
     fn(`[Renderer][${tag}] ${message}`);
@@ -2809,12 +2825,7 @@ if (!gotTheLock) {
       handleDeepLink(deepLink);
     }
 
-    // Focus main window
-    if (mainWindow) {
-      if (mainWindow.isMinimized()) mainWindow.restore();
-      if (!mainWindow.isVisible()) mainWindow.show();
-      if (!mainWindow.isFocused()) mainWindow.focus();
-    }
+    focusMainWindow('second instance activation');
   });
 
   // IPC 处理程序
@@ -4065,11 +4076,18 @@ if (!gotTheLock) {
 
     try {
       localCallback = await startAuthLocalCallback({
-        onCode: code => authCallbackRouter.handleAuthCode(code),
+        onCode: code => {
+          authCallbackRouter.handleAuthCode(code);
+          focusMainWindow('local auth callback');
+        },
+      });
+      const returnTo = appendLoginParams(baseUrl, {
+        source: 'electron',
+        electronLogin: 'success',
       });
       const finalUrl = appendLoginParams(baseUrl, {
         source: 'electron',
-        redirect_uri: localCallback.redirectUri,
+        redirect_uri: appendCallbackReturnTo(localCallback.redirectUri, returnTo),
         state: localCallback.state,
       });
       await shell.openExternal(finalUrl);

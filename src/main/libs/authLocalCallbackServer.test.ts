@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 
 import {
+  appendCallbackReturnTo,
   appendLoginParams,
   startAuthLocalCallback,
 } from './authLocalCallbackServer';
@@ -41,6 +42,19 @@ describe('appendLoginParams', () => {
   });
 });
 
+describe('appendCallbackReturnTo', () => {
+  test('adds portal return URL to the local callback redirect URI', () => {
+    const result = appendCallbackReturnTo(
+      'http://127.0.0.1:43210/auth/callback',
+      'https://c.youdao.com/dict/hardware/octopus/lobsterai-portal.html#/login?source=electron&electronLogin=success',
+    );
+
+    expect(result).toBe(
+      'http://127.0.0.1:43210/auth/callback?return_to=https%3A%2F%2Fc.youdao.com%2Fdict%2Fhardware%2Foctopus%2Flobsterai-portal.html%23%2Flogin%3Fsource%3Delectron%26electronLogin%3Dsuccess',
+    );
+  });
+});
+
 describe('startAuthLocalCallback', () => {
   test('starts on 127.0.0.1 with a dynamic callback port', async () => {
     const callback = await startAuthLocalCallback({ onCode: () => {} });
@@ -65,6 +79,22 @@ describe('startAuthLocalCallback', () => {
     expect(response.status).toBe(200);
     expect(body).toContain('登录成功');
     expect(codes).toEqual(['abc123']);
+  });
+
+  test('returns a success page that redirects back to the portal when return_to is safe', async () => {
+    const callback = await startAuthLocalCallback({ onCode: () => {} });
+    const returnTo = encodeURIComponent(
+      'https://c.youdao.com/dict/hardware/octopus/lobsterai-portal.html#/login?source=electron&electronLogin=success',
+    );
+
+    const response = await fetch(
+      `${callback.redirectUri}?return_to=${returnTo}&code=abc123&state=${callback.state}`,
+    );
+    const body = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(body).toContain('window.location.replace');
+    expect(body).toContain('electronLogin=success');
   });
 
   test('rejects callback when state does not match', async () => {

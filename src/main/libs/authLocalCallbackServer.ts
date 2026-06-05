@@ -28,7 +28,24 @@ const escapeHtml = (value: string): string =>
   });
 
 const renderCallbackHtml = (success: boolean, message: string): string => {
+  return renderCallbackHtmlWithRedirect(success, message, null);
+};
+
+const renderCallbackHtmlWithRedirect = (
+  success: boolean,
+  message: string,
+  redirectUrl: string | null,
+): string => {
   const color = success ? '#16a34a' : '#dc2626';
+  const safeRedirectScript = redirectUrl
+    ? `<script>setTimeout(function(){ window.location.replace(${JSON.stringify(redirectUrl)}); }, 900);</script>`
+    : '';
+  const redirectHint = redirectUrl
+    ? '<p class="hint">页面将自动返回 LobsterAI 登录页。</p>'
+    : '';
+  const redirectAction = redirectUrl
+    ? `<a class="action" href="${escapeHtml(redirectUrl)}">立即返回</a>`
+    : '';
   return `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><title>LobsterAI 登录</title>
 <style>
@@ -36,8 +53,10 @@ const renderCallbackHtml = (success: boolean, message: string): string => {
   .card { background: #fff; border: 1px solid rgba(20,18,11,.08); border-radius: 10px; padding: 30px 34px; max-width: 420px; box-shadow: 0 18px 50px rgba(20,18,11,.08); }
   h1 { color: ${color}; font-size: 20px; line-height: 1.3; margin: 0 0 10px; font-weight: 600; }
   p { color: #666; font-size: 14px; line-height: 1.6; margin: 0; }
+  .hint { margin-top: 8px; color: #999; }
+  .action { display: inline-flex; margin-top: 18px; color: #f26522; font-size: 14px; text-decoration: none; }
 </style></head>
-<body><div class="card"><h1>${success ? '登录成功' : '登录失败'}</h1><p>${escapeHtml(message)}</p></div></body></html>`;
+<body><div class="card"><h1>${success ? '登录成功' : '登录失败'}</h1><p>${escapeHtml(message)}</p>${redirectHint}${redirectAction}</div>${safeRedirectScript}</body></html>`;
 };
 
 const sendHtml = (
@@ -47,6 +66,21 @@ const sendHtml = (
   message: string,
 ): void => {
   const html = renderCallbackHtml(success, message);
+  res.writeHead(statusCode, {
+    'Content-Type': 'text/html; charset=utf-8',
+    'Cache-Control': 'no-store',
+  });
+  res.end(html);
+};
+
+const sendHtmlWithRedirect = (
+  res: http.ServerResponse,
+  statusCode: number,
+  success: boolean,
+  message: string,
+  redirectUrl: string | null,
+): void => {
+  const html = renderCallbackHtmlWithRedirect(success, message, redirectUrl);
   res.writeHead(statusCode, {
     'Content-Type': 'text/html; charset=utf-8',
     'Cache-Control': 'no-store',
@@ -80,6 +114,24 @@ export function appendLoginParams(baseUrl: string, params: Record<string, string
     parsed.searchParams.set(key, value);
   });
   return parsed.toString();
+}
+
+export function appendCallbackReturnTo(redirectUri: string, returnTo: string): string {
+  const parsed = new URL(redirectUri);
+  parsed.searchParams.set('return_to', returnTo);
+  return parsed.toString();
+}
+
+function resolveSafeReturnTo(value: string | null): string | null {
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return null;
+    if (!url.hostname.endsWith('.youdao.com') && url.hostname !== 'youdao.com') return null;
+    return url.toString();
+  } catch {
+    return null;
+  }
 }
 
 export async function startAuthLocalCallback(
@@ -126,22 +178,32 @@ export async function startAuthLocalCallback(
 
     const code = reqUrl.searchParams.get('code')?.trim();
     const returnedState = reqUrl.searchParams.get('state')?.trim();
+    const returnTo = resolveSafeReturnTo(reqUrl.searchParams.get('return_to'));
 
     if (!code) {
+      console.warn('[AuthLocalCallback] callback was rejected because the auth code was missing');
       sendHtml(res, 400, false, '登录回调缺少授权码，请返回 LobsterAI 后重试。');
       void callback.close();
       return;
     }
 
     if (returnedState !== state) {
+      console.warn('[AuthLocalCallback] callback was rejected because the state did not match');
       sendHtml(res, 400, false, '登录状态校验失败，请返回 LobsterAI 后重试。');
       void callback.close();
       return;
     }
 
     try {
+      console.log('[AuthLocalCallback] received login callback, delivering auth code');
       options.onCode(code);
-      sendHtml(res, 200, true, '登录已完成，可以关闭此页面并返回 LobsterAI。');
+      sendHtmlWithRedirect(
+        res,
+        200,
+        true,
+        '登录已完成，正在返回 LobsterAI 登录页。',
+        returnTo,
+      );
     } catch (error) {
       console.error('[AuthLocalCallback] failed to deliver auth code:', error);
       sendHtml(res, 500, false, '登录回调处理失败，请返回 LobsterAI 后重试。');
@@ -172,6 +234,7 @@ export async function startAuthLocalCallback(
 
   callback.redirectUri = `http://${AUTH_LOCAL_CALLBACK_HOST}:${address.port}${AUTH_CALLBACK_PATH}`;
   activeCallback = callback;
+  console.log(`[AuthLocalCallback] started local callback server on ${AUTH_LOCAL_CALLBACK_HOST}:${address.port}`);
 
   timer = setTimeout(() => {
     console.warn('[AuthLocalCallback] login callback timed out, closed local server');

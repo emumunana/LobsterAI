@@ -28,6 +28,8 @@
 - 保留现有 `lobsterai://auth/callback` deep link 逻辑作为兼容或 fallback。
 - 复用现有 `/api/auth/exchange`、token 持久化、刷新、用户信息加载逻辑。
 - 网页端登录成功后展示用户友好的成功页，提示可以关闭浏览器页面或返回 LobsterAI。
+- 客户端收到本地 callback 后主动恢复并聚焦 LobsterAI 主窗口，尽量让用户回到应用。
+- 本地 callback 成功页短暂停留后自动跳回 portal 的 Electron 登录成功页，避免浏览器长期停留在 `127.0.0.1` 地址。
 
 ### 1.3 非目标
 
@@ -81,7 +83,7 @@
 - `auth:login` 不再只打开 `loginUrl?source=electron`。
 - 新流程应先启动本地 callback server，再将以下参数追加到网页登录 URL：
   - `source=electron`
-  - `redirect_uri=http://127.0.0.1:<port>/auth/callback`
+  - `redirect_uri=http://127.0.0.1:<port>/auth/callback?return_to=<portalSuccessUrl>`
   - `state=<randomState>`
 - 若原始登录 URL 已包含 query，追加参数时必须使用 `URL` / `URLSearchParams`，避免手写字符串拼接错误。
 
@@ -111,6 +113,14 @@
 - 保留现有 `lobsterai://auth/callback?code=...` 解析。
 - macOS `open-url`、Windows/Linux `second-instance` 和 cold start 参数解析逻辑继续可用。
 - 若本地回调启动失败或网页端未支持 `redirect_uri`，可以退回 deep link 流程。
+
+### FR-7: 回到应用前台
+
+- 本地 callback 收到合法 code 后，主进程应主动恢复并聚焦主窗口。
+- 跨平台窗口行为：
+  - Windows/Linux/macOS 通用：`restore()`、`show()`、`focus()`。
+  - macOS 额外调用 `app.focus({ steal: true })`，提升从浏览器回到应用的成功率。
+- 聚焦失败不应阻断登录，只记录 warn 日志。
 
 ## 4. 实现方案
 
@@ -203,16 +213,48 @@ function appendLoginParams(baseUrl: string, params: Record<string, string>): str
 console.warn('[AuthLocalCallback] login callback timed out, closed local server');
 ```
 
-### 4.5 成功页
+### 4.5 应用窗口聚焦
+
+主进程维护统一的 `focusMainWindow(reason)` helper：
+
+```ts
+if (mainWindow.isMinimized()) mainWindow.restore();
+if (!mainWindow.isVisible()) mainWindow.show();
+if (!mainWindow.isFocused()) mainWindow.focus();
+if (process.platform === 'darwin') app.focus({ steal: true });
+```
+
+调用时机：
+
+- Windows/Linux 旧 deep link 进入 `second-instance` 后聚焦主窗口。
+- 新本地 callback 收到合法 code 并投递给 renderer 后，立即聚焦主窗口。
+
+macOS 仍可能受到系统抢焦点策略限制，但该处理能覆盖大多数浏览器登录后回到应用的场景。
+
+### 4.6 成功页与跳回 Portal
 
 本地 server 返回简单 HTML：
 
-- 成功：`登录成功，可以关闭此页面并返回 LobsterAI。`
+- 成功：`登录已完成，正在返回 LobsterAI 登录页。`
 - 失败：`登录失败，请返回 LobsterAI 后重试。`
 - 页面不包含 code、token 或敏感错误详情。
 - HTML 中的用户可见文案在主进程内生成。若未来需要多语言，可接入 `src/main/i18n.ts`。
 
-### 4.6 后端与网页端配合
+成功页会读取 `redirect_uri` 中携带的 `return_to` 参数，并在校验为有道域名后短暂停留再执行：
+
+```ts
+window.location.replace(returnTo);
+```
+
+客户端生成的 `return_to` 指向：
+
+```text
+<portal login url>?source=electron&electronLogin=success
+```
+
+这样用户会短暂经过 `127.0.0.1` callback URL，但最终浏览器地址栏回到 portal 页面。
+
+### 4.7 后端与网页端配合
 
 网页端需要支持以下行为：
 
@@ -234,7 +276,7 @@ lobsterai://auth/callback?code=<authCode>
 
 推荐优先只允许 `127.0.0.1`，减少 localhost 被 hosts 或代理环境影响的可能性。
 
-### 4.7 Portal 现状与兼容改造
+### 4.8 Portal 现状与兼容改造
 
 当前网页端代码位于：
 
@@ -253,6 +295,8 @@ https://c.youdao.com/dict/hardware/octopus/lobsterai-portal.html#/login?source=e
 现有逻辑：
 
 - `route.query.source` 决定是否为 Electron 登录，默认值为 `portal`。
+- `route.query.electronLogin === 'success'` 时显示 Electron 登录完成状态，不加载 URS SDK。
+- Electron 登录完成状态页使用 LobsterAI 品牌图标与成功文案，并提供"返回网站首页"按钮。
 - 普通 URS 登录成功后，`handleLoginSuccess()` 调用 `POST /api/auth/callback`，服务端返回 `data.authCode`。
 - 当 `source === 'electron' && authCode` 时，页面创建隐藏 iframe：
 
@@ -317,7 +361,7 @@ Portal 侧 loopback 校验建议：
 
 注意：如果使用 `window.location.href = http://127.0.0.1:<port>/auth/callback?...`，网页端会离开 portal 登录页并进入客户端本地成功页。客户端本地 server 应返回友好 HTML，避免用户看到空白页。
 
-### 4.8 OpenID 员工登录参数透传
+### 4.9 OpenID 员工登录参数透传
 
 OpenID 员工登录当前通过 `handleOpenIdLogin()` 跳转后端：
 
@@ -375,7 +419,7 @@ http://127.0.0.1:<actualPort>/auth/callback
 |------|------|
 | `src/main/libs/authLocalCallbackServer.ts` | 新建，本地 callback server、state 校验、HTML 响应、超时和关闭逻辑 |
 | `src/main/libs/authCallbackRouter.ts` | 修改，增加直接处理 auth code 的公开方法 |
-| `src/main/main.ts` | 修改 `auth:login`，启动本地 callback server 并打开带 `redirect_uri` 的网页登录 URL |
+| `src/main/main.ts` | 修改 `auth:login`，启动本地 callback server，打开带 `redirect_uri` 的网页登录 URL，并在 callback 成功后聚焦主窗口 |
 | `src/main/preload.ts` | 原则上无需修改；若新增 login 状态事件则需要暴露 |
 | `src/renderer/services/auth.ts` | 原则上无需修改；继续调用 `window.electron.auth.login(loginUrl)` 并监听现有 callback |
 | `src/shared/auth/constants.ts` | 如新增 IPC 事件或状态常量，则在此集中定义 |
@@ -397,6 +441,7 @@ http://127.0.0.1:<actualPort>/auth/callback
 | 网页端没有传回 state | 第一阶段可视为失败；如需灰度兼容，可用配置开关临时放宽 |
 | 浏览器显示 `127.0.0.1` 地址 | 成功页文案解释登录已完成；页面不展示敏感信息 |
 | 系统代理开启 | loopback 地址不应走远端代理；客户端只监听 127.0.0.1 |
+| Windows 默认浏览器登录 | 使用普通 HTTP loopback callback；窗口恢复通过 Electron `restore/show/focus` 完成 |
 
 ## 8. 测试计划
 
@@ -422,6 +467,7 @@ http://127.0.0.1:<actualPort>/auth/callback
 7. 在 portal 登录页使用 `#/login?source=electron&redirect_uri=http%3A%2F%2F127.0.0.1%3A<port>%2Fauth%2Fcallback&state=abc`，普通 URS 登录成功后跳转到本地 callback URL。
 8. 在 portal 登录页使用 `#/login?source=electron`，普通 URS 登录成功后仍触发 `lobsterai://auth/callback?code=...`。
 9. 员工 OpenID 登录成功后同样遵循 `redirect_uri` 优先、deep link fallback 的规则。
+10. 新本地 callback 收到合法 code 后，LobsterAI 主窗口会从最小化/后台状态恢复到前台。
 
 ### 8.3 回归测试
 
