@@ -131,23 +131,33 @@ test('createMigrationArchive excludes cache and log data and writes a manifest',
   writeFile(path.join(userData, 'GPUCache', 'gpu.bin'), 'gpu-cache');
   writeFile(path.join(userData, 'Network', 'Cookies'), 'network-cookies');
   writeFile(path.join(userData, 'logs', 'main.log'), 'log');
+  writeFile(path.join(userData, 'backups', 'sqlite', 'snapshots', 'lobsterai-latest.sqlite'), 'old-snapshot');
   writeFile(path.join(userData, 'Cookies'), 'cookies');
   writeFile(path.join(userData, 'DIPS-journal'), 'dips');
   writeFile(path.join(userData, '.com.github.Electron.test'), 'electron-marker');
+  writeSqliteFixture(path.join(userData, DB_FILENAME), 'source');
+  writeFile(path.join(userData, 'cowork', 'workspaces', 'session.txt'), 'workspace');
+  writeFile(path.join(userData, 'openclaw', 'mcp-packages', 'demo', 'node_modules', 'native.node'), 'native');
   writeFile(path.join(userData, 'openclaw', 'state', 'openclaw.json'), '{}');
+  writeFile(path.join(userData, 'runtimes', 'node', 'node.exe'), 'runtime');
   writeFile(path.join(userData, 'SKILLs', 'demo', 'SKILL.md'), '# Demo');
 
   createMigrationArchiveSync({ userDataPath: userData, outputPath: archivePath });
 
   const entries = listArchiveEntries(archivePath);
   expect(entries).toContain('LobsterAI/.lobsterai-migration.json');
+  expect(entries).toContain(`LobsterAI/${DB_FILENAME}`);
   expect(entries).toContain('LobsterAI/openclaw/state/openclaw.json');
   expect(entries).toContain('LobsterAI/SKILLs/demo/SKILL.md');
   expect(entries.some(entry => entry.includes('/Cache/'))).toBe(false);
   expect(entries.some(entry => entry.includes('/Code Cache/'))).toBe(false);
+  expect(entries.some(entry => entry.includes('/cowork/'))).toBe(false);
   expect(entries.some(entry => entry.includes('/GPUCache/'))).toBe(false);
   expect(entries.some(entry => entry.includes('/Network/'))).toBe(false);
+  expect(entries.some(entry => entry.includes('/openclaw/mcp-packages/'))).toBe(false);
+  expect(entries.some(entry => entry.includes('/backups/'))).toBe(false);
   expect(entries.some(entry => entry.includes('/logs/'))).toBe(false);
+  expect(entries.some(entry => entry.includes('/runtimes/'))).toBe(false);
   expect(entries.some(entry => entry.includes('/Cookies'))).toBe(false);
   expect(entries.some(entry => entry.includes('/DIPS'))).toBe(false);
   expect(entries.some(entry => entry.includes('/.com.github.Electron.'))).toBe(false);
@@ -159,9 +169,9 @@ test('createMigrationArchive replaces the live sqlite database with the snapshot
   const archivePath = path.join(root, 'backup.tar.gz');
   const sqliteSnapshotPath = path.join(root, 'snapshot.sqlite');
 
-  writeFile(path.join(userData, DB_FILENAME), 'live-db');
+  writeSqliteFixture(path.join(userData, DB_FILENAME), 'live');
   writeFile(path.join(userData, `${DB_FILENAME}-wal`), 'live-wal');
-  writeFile(sqliteSnapshotPath, 'snapshot-db');
+  writeSqliteFixture(sqliteSnapshotPath, 'snapshot');
 
   createMigrationArchiveSync({
     userDataPath: userData,
@@ -170,15 +180,28 @@ test('createMigrationArchive replaces the live sqlite database with the snapshot
   });
 
   const extractRoot = extractArchive(archivePath);
-  expect(fs.readFileSync(path.join(extractRoot, 'LobsterAI', DB_FILENAME), 'utf8')).toBe('snapshot-db');
+  expect(readSqliteString(path.join(extractRoot, 'LobsterAI', DB_FILENAME), 'SELECT value FROM kv WHERE key = ?', ['auth_tokens']))
+    .toContain('snapshot-refresh');
   expect(fs.existsSync(path.join(extractRoot, 'LobsterAI', `${DB_FILENAME}-wal`))).toBe(false);
+});
+
+test('createMigrationArchive rejects a source without a sqlite database', () => {
+  const root = makeTempDir();
+  const userData = path.join(root, 'LobsterAI');
+  const archivePath = path.join(root, 'backup.tar.gz');
+
+  writeFile(path.join(userData, 'SKILLs', 'demo', 'SKILL.md'), '# Demo');
+
+  expect(() => createMigrationArchiveSync({ userDataPath: userData, outputPath: archivePath }))
+    .toThrow(`missing ${DB_FILENAME}`);
+  expect(fs.existsSync(archivePath)).toBe(false);
 });
 
 test('inspectMigrationArchive accepts legacy Windows PowerShell archive root', () => {
   const root = makeTempDir();
   const legacyRoot = path.join(root, 'AppData', 'Roaming', 'LobsterAI');
   const archivePath = path.join(root, 'legacy.tar.gz');
-  writeFile(path.join(legacyRoot, DB_FILENAME), 'legacy-db');
+  writeSqliteFixture(path.join(legacyRoot, DB_FILENAME), 'legacy');
 
   tar.create({
     sync: true,
@@ -190,6 +213,22 @@ test('inspectMigrationArchive accepts legacy Windows PowerShell archive root', (
   const info = inspectMigrationArchiveSync(archivePath);
   expect(info.root).toBe('AppData/Roaming/LobsterAI');
   expect(info.rootKind).toBe('legacy-windows');
+});
+
+test('inspectMigrationArchive rejects unreadable sqlite database', () => {
+  const root = makeTempDir();
+  const sourceUserData = path.join(root, 'LobsterAI');
+  const archivePath = path.join(root, 'invalid.tar.gz');
+  writeFile(path.join(sourceUserData, DB_FILENAME), 'not a sqlite database');
+
+  tar.create({
+    sync: true,
+    gzip: true,
+    file: archivePath,
+    cwd: root,
+  }, ['LobsterAI']);
+
+  expect(() => inspectMigrationArchiveSync(archivePath)).toThrow(`unreadable ${DB_FILENAME}`);
 });
 
 test('inspectMigrationArchive rejects parent-directory archive paths', () => {
@@ -268,6 +307,34 @@ test('performDataMigrationRestoreSync restores backup data without a pending mar
   expect(readSqliteCount(path.join(targetUserData, DB_FILENAME), 'user_memory_sources')).toBe(1);
 });
 
+test('performDataMigrationRestoreSync restores valid backup when current sqlite is unreadable', () => {
+  const root = makeTempDir();
+  const sourceUserData = path.join(root, 'source', 'LobsterAI');
+  const targetUserData = path.join(root, 'target', 'LobsterAI');
+  const rollbackRoot = path.join(root, 'rollbacks');
+  const archivePath = path.join(root, 'source-backup.tar.gz');
+
+  writeSqliteFixture(path.join(sourceUserData, DB_FILENAME), 'source');
+  writeFile(path.join(targetUserData, DB_FILENAME), 'not a sqlite database');
+  writeFile(path.join(targetUserData, 'old-only.txt'), 'old');
+
+  createMigrationArchiveSync({ userDataPath: sourceUserData, outputPath: archivePath });
+
+  const result = performDataMigrationRestoreSync({
+    userDataPath: targetUserData,
+    rollbackRootPath: rollbackRoot,
+    archivePath,
+    now: new Date('2026-06-08T01:02:03Z'),
+  });
+
+  expect(result?.status).toBe(DataMigrationRestoreStatus.Success);
+  expect(result?.rollbackPath).toBeTruthy();
+  expect(fs.existsSync(result?.rollbackPath || '')).toBe(true);
+  expect(readSqliteString(path.join(targetUserData, DB_FILENAME), 'SELECT value FROM kv WHERE key = ?', ['auth_tokens']))
+    .toContain('source-refresh');
+  expect(fs.existsSync(path.join(targetUserData, 'old-only.txt'))).toBe(false);
+});
+
 test('performPendingDataMigrationRestoreSync replaces data in place and preserves runtime locks', () => {
   const root = makeTempDir();
   const sourceUserData = path.join(root, 'source', 'LobsterAI');
@@ -277,9 +344,18 @@ test('performPendingDataMigrationRestoreSync replaces data in place and preserve
 
   writeSqliteFixture(path.join(sourceUserData, DB_FILENAME), 'source');
   writeFile(path.join(sourceUserData, 'openclaw', 'state', 'openclaw.json'), '{"source":true}');
+  writeFile(path.join(sourceUserData, 'backups', 'sqlite', 'snapshots', 'lobsterai-latest.sqlite'), 'source-backup');
+  writeFile(path.join(sourceUserData, 'cowork', 'bin', 'node.cmd'), 'source-shim');
+  writeFile(path.join(sourceUserData, 'Network', 'Cookies'), 'source-network-cookies');
+  writeFile(path.join(sourceUserData, 'openclaw', 'mcp-packages', 'demo', 'node_modules', 'native.node'), 'native');
+  writeFile(path.join(sourceUserData, 'runtimes', 'python', 'python.exe'), 'source-runtime');
   writeSqliteFixture(path.join(targetUserData, DB_FILENAME), 'target');
   writeFile(path.join(targetUserData, 'old-only.txt'), 'old');
+  writeFile(path.join(targetUserData, 'backups', 'sqlite', 'snapshots', 'lobsterai-latest.sqlite'), 'target-backup');
+  writeFile(path.join(targetUserData, 'cowork', 'bin', 'node.cmd'), 'target-shim');
   writeFile(path.join(targetUserData, 'Network', 'Cookies'), 'runtime-cookies');
+  writeFile(path.join(targetUserData, 'openclaw', 'mcp-packages', 'demo', 'node_modules', 'target-native.node'), 'target-native');
+  writeFile(path.join(targetUserData, 'runtimes', 'python', 'python.exe'), 'target-runtime');
   writeFile(path.join(targetUserData, 'SingletonLock'), 'runtime-lock');
 
   createMigrationArchiveSync({ userDataPath: sourceUserData, outputPath: archivePath });
@@ -292,9 +368,19 @@ test('performPendingDataMigrationRestoreSync replaces data in place and preserve
   });
 
   expect(result?.status).toBe(DataMigrationRestoreStatus.Success);
+  const rollbackEntries = listArchiveEntries(result?.rollbackPath || '');
+  expect(rollbackEntries).toContain('LobsterAI/backups/sqlite/snapshots/lobsterai-latest.sqlite');
+  expect(rollbackEntries).toContain('LobsterAI/cowork/bin/node.cmd');
+  expect(rollbackEntries).toContain('LobsterAI/openclaw/mcp-packages/demo/node_modules/target-native.node');
+  expect(rollbackEntries).toContain('LobsterAI/runtimes/python/python.exe');
+  expect(rollbackEntries.some(entry => entry.includes('/Network/'))).toBe(false);
   expect(readSqliteString(path.join(targetUserData, DB_FILENAME), 'SELECT value FROM kv WHERE key = ?', ['auth_tokens']))
     .toContain('source-refresh');
   expect(fs.readFileSync(path.join(targetUserData, 'openclaw', 'state', 'openclaw.json'), 'utf8')).toBe('{"source":true}');
+  expect(fs.existsSync(path.join(targetUserData, 'openclaw', 'mcp-packages'))).toBe(false);
+  expect(fs.existsSync(path.join(targetUserData, 'backups'))).toBe(false);
+  expect(fs.existsSync(path.join(targetUserData, 'cowork'))).toBe(false);
+  expect(fs.existsSync(path.join(targetUserData, 'runtimes'))).toBe(false);
   expect(fs.existsSync(path.join(targetUserData, 'old-only.txt'))).toBe(false);
   expect(fs.readFileSync(path.join(targetUserData, 'Network', 'Cookies'), 'utf8')).toBe('runtime-cookies');
   expect(fs.readFileSync(path.join(targetUserData, 'SingletonLock'), 'utf8')).toBe('runtime-lock');
@@ -327,10 +413,16 @@ test('performDataMigrationRestoreSync rolls back when the backup is missing sqli
   const rollbackRoot = path.join(root, 'rollbacks');
   const archivePath = path.join(root, 'source-backup.tar.gz');
 
+  const sourceParent = path.dirname(sourceUserData);
   writeFile(path.join(sourceUserData, 'SKILLs', 'demo', 'SKILL.md'), '# Demo');
   writeSqliteFixture(path.join(targetUserData, DB_FILENAME), 'target');
 
-  createMigrationArchiveSync({ userDataPath: sourceUserData, outputPath: archivePath });
+  tar.create({
+    sync: true,
+    gzip: true,
+    file: archivePath,
+    cwd: sourceParent,
+  }, ['LobsterAI']);
 
   const result = performDataMigrationRestoreSync({
     userDataPath: targetUserData,
@@ -343,5 +435,41 @@ test('performDataMigrationRestoreSync rolls back when the backup is missing sqli
   expect(result?.error).toContain(`missing ${DB_FILENAME}`);
   expect(readSqliteString(path.join(targetUserData, DB_FILENAME), 'SELECT value FROM kv WHERE key = ?', ['auth_tokens']))
     .toContain('target-refresh');
+  expect(fs.existsSync(path.join(targetUserData, 'SKILLs', 'demo', 'SKILL.md'))).toBe(false);
+});
+
+test('performDataMigrationRestoreSync rejects unreadable backup sqlite before touching target data', () => {
+  const root = makeTempDir();
+  const sourceUserData = path.join(root, 'source', 'LobsterAI');
+  const targetUserData = path.join(root, 'target', 'LobsterAI');
+  const rollbackRoot = path.join(root, 'rollbacks');
+  const archivePath = path.join(root, 'source-backup.tar.gz');
+
+  const sourceParent = path.dirname(sourceUserData);
+  writeFile(path.join(sourceUserData, DB_FILENAME), 'not a sqlite database');
+  writeFile(path.join(sourceUserData, 'SKILLs', 'demo', 'SKILL.md'), '# Demo');
+  writeSqliteFixture(path.join(targetUserData, DB_FILENAME), 'target');
+  writeFile(path.join(targetUserData, 'backups', 'sqlite', 'snapshots', 'lobsterai-latest.sqlite'), 'target-backup');
+
+  tar.create({
+    sync: true,
+    gzip: true,
+    file: archivePath,
+    cwd: sourceParent,
+  }, ['LobsterAI']);
+
+  const result = performDataMigrationRestoreSync({
+    userDataPath: targetUserData,
+    rollbackRootPath: rollbackRoot,
+    archivePath,
+    now: new Date('2026-06-08T01:02:03Z'),
+  });
+
+  expect(result?.status).toBe(DataMigrationRestoreStatus.Failed);
+  expect(result?.error).toContain(`unreadable ${DB_FILENAME}`);
+  expect(readSqliteString(path.join(targetUserData, DB_FILENAME), 'SELECT value FROM kv WHERE key = ?', ['auth_tokens']))
+    .toContain('target-refresh');
+  expect(fs.readFileSync(path.join(targetUserData, 'backups', 'sqlite', 'snapshots', 'lobsterai-latest.sqlite'), 'utf8'))
+    .toBe('target-backup');
   expect(fs.existsSync(path.join(targetUserData, 'SKILLs', 'demo', 'SKILL.md'))).toBe(false);
 });

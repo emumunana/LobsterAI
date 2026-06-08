@@ -10,6 +10,7 @@ import {
   DataMigrationRestoreStatus,
 } from '../../../shared/dataMigration/constants';
 import { APP_NAME, DB_FILENAME } from '../../appConstants';
+import { SQLITE_BACKUP_DIR_NAME } from '../sqliteBackup/constants';
 
 const CURRENT_ARCHIVE_ROOT = APP_NAME;
 const LEGACY_WINDOWS_ARCHIVE_ROOT = 'AppData/Roaming/LobsterAI';
@@ -18,6 +19,7 @@ const PENDING_RESTORE_FILE_NAME = '.lobsterai-data-migration-restore-pending.jso
 const LAST_RESTORE_RESULT_FILE_NAME = '.lobsterai-data-migration-restore-result.json';
 const ARCHIVE_FORMAT = 'lobsterai-user-data';
 const ARCHIVE_FORMAT_VERSION = 1;
+const SQLITE_BACKUP_TOP_LEVEL_DIR_NAME = SQLITE_BACKUP_DIR_NAME.split('/')[0] || 'backups';
 
 const SQLITE_MIGRATION_TABLES = [
   'kv',
@@ -45,7 +47,29 @@ const SQLITE_MIGRATION_KV_KEYS = [
   'installation_uuid',
 ] as const;
 
-const EXCLUDED_TOP_LEVEL_NAMES = new Set([
+const SOURCE_EXCLUDED_TOP_LEVEL_NAMES = new Set([
+  'Cache',
+  'Code Cache',
+  'cowork',
+  'GPUCache',
+  'DawnGraphiteCache',
+  'DawnWebGPUCache',
+  'Network',
+  'Service Worker',
+  'SingletonCookie',
+  'SingletonLock',
+  'SingletonSocket',
+  'blob_storage',
+  'Crashpad',
+  SQLITE_BACKUP_TOP_LEVEL_DIR_NAME,
+  'logs',
+  'lockfile',
+  'runtimes',
+  PENDING_RESTORE_FILE_NAME,
+  LAST_RESTORE_RESULT_FILE_NAME,
+]);
+
+const RESTORE_PRESERVED_TOP_LEVEL_NAMES = new Set([
   'Cache',
   'Code Cache',
   'GPUCache',
@@ -64,10 +88,16 @@ const EXCLUDED_TOP_LEVEL_NAMES = new Set([
   LAST_RESTORE_RESULT_FILE_NAME,
 ]);
 
-const EXCLUDED_TOP_LEVEL_PREFIXES = [
+const SOURCE_EXCLUDED_TOP_LEVEL_PREFIXES = [
   'Cookies',
   'DIPS',
   '.com.github.Electron.',
+];
+
+const RESTORE_PRESERVED_TOP_LEVEL_PREFIXES = SOURCE_EXCLUDED_TOP_LEVEL_PREFIXES;
+
+const EXCLUDED_RELATIVE_PATHS = [
+  'openclaw/mcp-packages',
 ];
 
 const ALLOWED_ENTRY_TYPES = new Set([
@@ -96,6 +126,12 @@ export interface MigrationArchiveInfo {
   root: string;
   rootKind: 'current' | 'legacy-windows';
   entryCount: number;
+  hasSqliteDatabase: boolean;
+}
+
+interface InspectMigrationArchiveOptions {
+  requireSqliteDatabase?: boolean;
+  validateSqliteDatabase?: boolean;
 }
 
 export interface PendingDataMigrationRestoreRequest {
@@ -154,10 +190,53 @@ const isPathInside = (candidatePath: string, parentPath: string): boolean => {
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
 };
 
-const isExcludedTopLevelEntry = (relativePosixPath: string): boolean => {
+const isTopLevelEntryMatch = (
+  relativePosixPath: string,
+  names: Set<string>,
+  prefixes: readonly string[],
+): boolean => {
   const firstSegment = relativePosixPath.split('/')[0] || '';
-  return EXCLUDED_TOP_LEVEL_NAMES.has(firstSegment)
-    || EXCLUDED_TOP_LEVEL_PREFIXES.some(prefix => firstSegment.startsWith(prefix));
+  return names.has(firstSegment)
+    || prefixes.some(prefix => firstSegment.startsWith(prefix));
+};
+
+const isExcludedSourceTopLevelEntry = (relativePosixPath: string): boolean =>
+  isTopLevelEntryMatch(
+    relativePosixPath,
+    SOURCE_EXCLUDED_TOP_LEVEL_NAMES,
+    SOURCE_EXCLUDED_TOP_LEVEL_PREFIXES,
+  );
+
+const isPreservedRestoreTopLevelEntry = (relativePosixPath: string): boolean =>
+  isTopLevelEntryMatch(
+    relativePosixPath,
+    RESTORE_PRESERVED_TOP_LEVEL_NAMES,
+    RESTORE_PRESERVED_TOP_LEVEL_PREFIXES,
+  );
+
+const isExcludedMigrationEntry = (relativePosixPath: string): boolean => {
+  if (!relativePosixPath) return false;
+  if (isExcludedSourceTopLevelEntry(relativePosixPath)) return true;
+  return EXCLUDED_RELATIVE_PATHS.some(excludedPath => (
+    relativePosixPath === excludedPath
+    || relativePosixPath.startsWith(`${excludedPath}/`)
+  ));
+};
+
+const getExclusionManifestFields = (archiveKind: DataMigrationArchiveKind): Record<string, unknown> => {
+  if (archiveKind === 'rollback') {
+    return {
+      excludedTopLevelNames: [...RESTORE_PRESERVED_TOP_LEVEL_NAMES].sort(),
+      excludedTopLevelPrefixes: [...RESTORE_PRESERVED_TOP_LEVEL_PREFIXES].sort(),
+      excludedRelativePaths: [],
+    };
+  }
+
+  return {
+    excludedTopLevelNames: [...SOURCE_EXCLUDED_TOP_LEVEL_NAMES].sort(),
+    excludedTopLevelPrefixes: [...SOURCE_EXCLUDED_TOP_LEVEL_PREFIXES].sort(),
+    excludedRelativePaths: [...EXCLUDED_RELATIVE_PATHS].sort(),
+  };
 };
 
 const shouldExcludeSourcePath = (
@@ -166,7 +245,12 @@ const shouldExcludeSourcePath = (
   input: CreateMigrationArchiveInput,
 ): boolean => {
   if (!relativePosixPath) return false;
-  if (isExcludedTopLevelEntry(relativePosixPath)) return true;
+  const archiveKind = input.archiveKind ?? 'backup';
+  if (archiveKind === 'rollback') {
+    if (isPreservedRestoreTopLevelEntry(relativePosixPath)) return true;
+  } else if (isExcludedMigrationEntry(relativePosixPath)) {
+    return true;
+  }
 
   const firstSegment = relativePosixPath.split('/')[0] || '';
   if (input.sqliteSnapshotPath) {
@@ -289,8 +373,23 @@ const readSqliteMigrationSummarySync = (dbPath: string): SqliteMigrationSummary 
   }
 };
 
+const assertMigrationSqliteReadySync = (dbPath: string, label: string): SqliteMigrationSummary => {
+  const summary = readSqliteMigrationSummarySync(dbPath);
+  if (!summary.exists) {
+    throw new Error(`${label} is missing ${DB_FILENAME}.`);
+  }
+  if (summary.error) {
+    throw new Error(`${label} contains an unreadable ${DB_FILENAME}: ${summary.error}`);
+  }
+  if (summary.quickCheck !== 'ok') {
+    throw new Error(`${label} ${DB_FILENAME} failed quick_check: ${summary.quickCheck || 'empty result'}`);
+  }
+  return summary;
+};
+
 const buildManifest = (input: CreateMigrationArchiveInput): Record<string, unknown> => {
   const now = input.now ?? new Date();
+  const archiveKind = input.archiveKind ?? 'backup';
   const sqliteSourcePath = input.sqliteSnapshotPath
     ? resolvePath(input.sqliteSnapshotPath)
     : path.join(resolvePath(input.userDataPath), DB_FILENAME);
@@ -298,14 +397,13 @@ const buildManifest = (input: CreateMigrationArchiveInput): Record<string, unkno
     format: ARCHIVE_FORMAT,
     version: ARCHIVE_FORMAT_VERSION,
     appName: APP_NAME,
-    archiveKind: input.archiveKind ?? 'backup',
+    archiveKind,
     archiveRoot: CURRENT_ARCHIVE_ROOT,
     createdAt: now.toISOString(),
     platform: process.platform,
     arch: process.arch,
     includesWorkingDirectories: false,
-    excludedTopLevelNames: [...EXCLUDED_TOP_LEVEL_NAMES].sort(),
-    excludedTopLevelPrefixes: [...EXCLUDED_TOP_LEVEL_PREFIXES].sort(),
+    ...getExclusionManifestFields(archiveKind),
     sqlite: readSqliteMigrationSummarySync(sqliteSourcePath),
   };
 };
@@ -315,6 +413,7 @@ export const createMigrationArchiveSync = (
 ): CreateMigrationArchiveResult => {
   const userDataPath = resolvePath(input.userDataPath);
   const outputPath = resolvePath(input.outputPath);
+  const archiveKind = input.archiveKind ?? 'backup';
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'lobsterai-data-migration-'));
   const stageParent = path.join(tempRoot, 'stage');
   const stageUserDataRoot = path.join(stageParent, CURRENT_ARCHIVE_ROOT);
@@ -333,6 +432,10 @@ export const createMigrationArchiveSync = (
 
     if (input.sqliteSnapshotPath) {
       copyFileSync(resolvePath(input.sqliteSnapshotPath), path.join(stageUserDataRoot, DB_FILENAME));
+    }
+
+    if (archiveKind !== 'rollback') {
+      assertMigrationSqliteReadySync(path.join(stageUserDataRoot, DB_FILENAME), 'Backup staging');
     }
 
     writeJsonSync(path.join(stageUserDataRoot, MANIFEST_FILE_NAME), buildManifest(input));
@@ -394,6 +497,9 @@ const resolveArchiveRoot = (entryPath: string): Pick<MigrationArchiveInfo, 'root
   return null;
 };
 
+const isArchiveSqliteDatabaseEntry = (entryPath: string, root: string): boolean =>
+  entryPath === `${root}/${DB_FILENAME}`;
+
 const isArchiveRootParentDirectory = (entryPath: string): boolean => (
   `${LEGACY_WINDOWS_ARCHIVE_ROOT}/`.startsWith(`${entryPath}/`)
   || `${CURRENT_ARCHIVE_ROOT}/`.startsWith(`${entryPath}/`)
@@ -402,7 +508,11 @@ const isArchiveRootParentDirectory = (entryPath: string): boolean => (
 const inspectArchiveEntry = (
   archivePath: string,
   entry: { path: string; type?: string },
-  state: { root: Pick<MigrationArchiveInfo, 'root' | 'rootKind'> | null; entryCount: number },
+  state: {
+    root: Pick<MigrationArchiveInfo, 'root' | 'rootKind'> | null;
+    entryCount: number;
+    hasSqliteDatabase: boolean;
+  },
 ): void => {
   const normalizedPath = assertSafeArchiveEntryPath(entry.path);
   if (entry.type && !ALLOWED_ENTRY_TYPES.has(entry.type)) {
@@ -421,13 +531,52 @@ const inspectArchiveEntry = (
   }
   state.root = root;
   state.entryCount += 1;
+  if (isArchiveSqliteDatabaseEntry(normalizedPath, root.root)) {
+    if (entry.type && entry.type !== 'File' && entry.type !== 'OldFile') {
+      throw new Error(`Backup archive ${DB_FILENAME} entry is not a file.`);
+    }
+    state.hasSqliteDatabase = true;
+  }
 };
 
-export const inspectMigrationArchiveSync = (archivePath: string): MigrationArchiveInfo => {
+const validateArchiveSqliteDatabaseSync = (archivePath: string, root: string): void => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'lobsterai-data-migration-inspect-'));
+  try {
+    tar.extract({
+      sync: true,
+      file: archivePath,
+      cwd: tempRoot,
+      preservePaths: false,
+      unlink: true,
+      filter: (entryPath, entry) => {
+        const normalizedPath = assertSafeArchiveEntryPath(entryPath);
+        if ('type' in entry && entry.type && !ALLOWED_ENTRY_TYPES.has(entry.type)) {
+          throw new Error(`Backup archive contains an unsupported entry type: ${entry.type}`);
+        }
+        return normalizedPath === `${root}/${DB_FILENAME}`;
+      },
+    });
+    assertMigrationSqliteReadySync(path.join(tempRoot, ...root.split('/'), DB_FILENAME), 'Backup archive');
+  } finally {
+    removeDirIfExistsSync(tempRoot);
+  }
+};
+
+export const inspectMigrationArchiveSync = (
+  archivePath: string,
+  options: InspectMigrationArchiveOptions = {},
+): MigrationArchiveInfo => {
   const resolvedArchivePath = resolvePath(archivePath);
-  const state: { root: Pick<MigrationArchiveInfo, 'root' | 'rootKind'> | null; entryCount: number } = {
+  const requireSqliteDatabase = options.requireSqliteDatabase ?? true;
+  const validateSqliteDatabase = options.validateSqliteDatabase ?? true;
+  const state: {
+    root: Pick<MigrationArchiveInfo, 'root' | 'rootKind'> | null;
+    entryCount: number;
+    hasSqliteDatabase: boolean;
+  } = {
     root: null,
     entryCount: 0,
+    hasSqliteDatabase: false,
   };
 
   tar.list({
@@ -439,12 +588,19 @@ export const inspectMigrationArchiveSync = (archivePath: string): MigrationArchi
   if (!state.root || state.entryCount <= 0) {
     throw new Error('Backup archive is empty or missing LobsterAI user data.');
   }
+  if (requireSqliteDatabase && !state.hasSqliteDatabase) {
+    throw new Error(`Backup archive is missing ${DB_FILENAME}.`);
+  }
+  if (requireSqliteDatabase && validateSqliteDatabase) {
+    validateArchiveSqliteDatabaseSync(resolvedArchivePath, state.root.root);
+  }
 
   return {
     archivePath: resolvedArchivePath,
     root: state.root.root,
     rootKind: state.root.rootKind,
     entryCount: state.entryCount,
+    hasSqliteDatabase: state.hasSqliteDatabase,
   };
 };
 
@@ -453,8 +609,12 @@ export const inspectMigrationArchive = async (archivePath: string): Promise<Migr
 
 const extractMigrationArchiveToTempSync = (
   archivePath: string,
+  options: { requireSqliteDatabase?: boolean } = {},
 ): { tempRoot: string; sourceRoot: string; info: MigrationArchiveInfo } => {
-  const info = inspectMigrationArchiveSync(archivePath);
+  const info = inspectMigrationArchiveSync(archivePath, {
+    requireSqliteDatabase: options.requireSqliteDatabase,
+    validateSqliteDatabase: false,
+  });
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'lobsterai-data-migration-restore-'));
 
   try {
@@ -539,38 +699,30 @@ const buildFailedRestoreResult = (
 const clearRestorableUserDataSync = (userDataPath: string): void => {
   ensureDirSync(userDataPath);
   for (const entry of fs.readdirSync(userDataPath)) {
-    if (isExcludedTopLevelEntry(entry)) continue;
+    if (isPreservedRestoreTopLevelEntry(entry)) continue;
     removeDirIfExistsSync(path.join(userDataPath, entry));
   }
 };
 
-const replaceRestorableUserDataSync = (sourceRoot: string, userDataPath: string): void => {
+const replaceRestorableUserDataSync = (
+  sourceRoot: string,
+  userDataPath: string,
+  shouldExcludeCopiedEntry = isExcludedMigrationEntry,
+): void => {
   clearRestorableUserDataSync(userDataPath);
-  copyDirectorySync(sourceRoot, userDataPath);
+  copyDirectorySync(
+    sourceRoot,
+    userDataPath,
+    (relativePosixPath) => shouldExcludeCopiedEntry(relativePosixPath),
+  );
 };
 
-const assertSqliteRestoredSync = (sourceRoot: string, userDataPath: string): void => {
-  const sourceSummary = readSqliteMigrationSummarySync(path.join(sourceRoot, DB_FILENAME));
-  if (!sourceSummary.exists) {
-    throw new Error(`Backup archive is missing ${DB_FILENAME}.`);
-  }
-  if (sourceSummary.error) {
-    throw new Error(`Backup archive contains an unreadable ${DB_FILENAME}: ${sourceSummary.error}`);
-  }
-  if (sourceSummary.quickCheck !== 'ok') {
-    throw new Error(`Backup archive ${DB_FILENAME} failed quick_check: ${sourceSummary.quickCheck || 'empty result'}`);
-  }
-
-  const targetSummary = readSqliteMigrationSummarySync(path.join(userDataPath, DB_FILENAME));
-  if (!targetSummary.exists) {
-    throw new Error(`Restored ${DB_FILENAME} is missing.`);
-  }
-  if (targetSummary.error) {
-    throw new Error(`Restored ${DB_FILENAME} is unreadable: ${targetSummary.error}`);
-  }
-  if (targetSummary.quickCheck !== 'ok') {
-    throw new Error(`Restored ${DB_FILENAME} failed quick_check: ${targetSummary.quickCheck || 'empty result'}`);
-  }
+const assertSqliteRestoredSync = (
+  sourceRoot: string,
+  userDataPath: string,
+  sourceSummary = assertMigrationSqliteReadySync(path.join(sourceRoot, DB_FILENAME), 'Backup archive'),
+): void => {
+  const targetSummary = assertMigrationSqliteReadySync(path.join(userDataPath, DB_FILENAME), 'Restored data');
   if (sourceSummary.checksumSha256 !== targetSummary.checksumSha256) {
     throw new Error(`Restored ${DB_FILENAME} checksum does not match the backup archive.`);
   }
@@ -593,9 +745,9 @@ const assertSqliteRestoredSync = (sourceRoot: string, userDataPath: string): voi
 };
 
 const restoreRollbackArchiveSync = (rollbackPath: string, userDataPath: string): void => {
-  const rollback = extractMigrationArchiveToTempSync(rollbackPath);
+  const rollback = extractMigrationArchiveToTempSync(rollbackPath, { requireSqliteDatabase: false });
   try {
-    replaceRestorableUserDataSync(rollback.sourceRoot, userDataPath);
+    replaceRestorableUserDataSync(rollback.sourceRoot, userDataPath, isPreservedRestoreTopLevelEntry);
   } finally {
     removeDirIfExistsSync(rollback.tempRoot);
   }
@@ -626,10 +778,11 @@ export const performDataMigrationRestoreSync = (
 
     const extracted = extractMigrationArchiveToTempSync(archivePath);
     extractedTempRoot = extracted.tempRoot;
+    const sourceSummary = assertMigrationSqliteReadySync(path.join(extracted.sourceRoot, DB_FILENAME), 'Backup archive');
 
     targetWasTouched = true;
     replaceRestorableUserDataSync(extracted.sourceRoot, input.userDataPath);
-    assertSqliteRestoredSync(extracted.sourceRoot, input.userDataPath);
+    assertSqliteRestoredSync(extracted.sourceRoot, input.userDataPath, sourceSummary);
 
     const result: DataMigrationLastRestoreResult = {
       status: DataMigrationRestoreStatus.Success,
