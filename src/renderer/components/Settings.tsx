@@ -3835,7 +3835,9 @@ const Settings: React.FC<SettingsProps> = ({
               src="logo.png"
               alt="LobsterAI"
               className="w-16 h-16 mb-3 cursor-pointer select-none"
-              onClick={() => {
+              onClick={(e) => {
+                if (!e.altKey || !e.shiftKey) return;
+
                 const next = logoClickCount + 1;
                 setLogoClickCount(next);
                 if (next >= 10 && !testModeUnlocked) {
