@@ -4941,6 +4941,13 @@ if (!gotTheLock) {
         archivePath,
       });
       const success = restoreResult?.status === DataMigrationRestoreStatus.Success;
+      console.log(
+        `[DataMigration] restore finished with status ${restoreResult?.status ?? 'unknown'}; `
+        + `rollback archive ${restoreResult?.rollbackPath ?? 'was not created'}.`,
+      );
+      if (!success) {
+        console.error('[DataMigration] restore failed:', restoreResult?.error ?? 'Unknown restore error');
+      }
       if (rendererReleased) {
         setTimeout(() => {
           app.relaunch();
@@ -9255,6 +9262,9 @@ if (!gotTheLock) {
     if (coworkEngineRouter) {
       console.log('[Main] Stopping cowork sessions...');
       coworkEngineRouter.stopAllSessions();
+    }
+    if (openClawRuntimeAdapter) {
+      openClawRuntimeAdapter.disconnectGatewayClient();
     }
 
     await stopCoworkOpenAICompatProxy().catch(error => {
