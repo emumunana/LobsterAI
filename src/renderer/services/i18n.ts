@@ -1414,6 +1414,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     kitUninstallConfirm: '确定卸载套件“{name}”吗？',
     kitUninstalling: '卸载中...',
     kitInstalled: '已安装',
+    kitReinstallRequiredBadge: '需重新安装',
+    kitReinstallRequiredDetail: '已安装版本 v{installedVersion}，当前版本 v{currentVersion}。请先卸载后重新安装以使用新版本。',
     kitLoading: '加载中...',
     kitEmpty: '暂无套件',
     kitBack: '返回',
@@ -3892,6 +3894,9 @@ const translations: Record<LanguageType, Record<string, string>> = {
     kitUninstallConfirm: 'Uninstall kit "{name}"?',
     kitUninstalling: 'Uninstalling...',
     kitInstalled: 'Installed',
+    kitReinstallRequiredBadge: 'Reinstall needed',
+    kitReinstallRequiredDetail:
+      'Installed version v{installedVersion}, current version v{currentVersion}. Uninstall and install again to use the new version.',
     kitLoading: 'Loading...',
     kitEmpty: 'No kits available',
     kitBack: 'Back',
