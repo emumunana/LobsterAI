@@ -23,6 +23,7 @@ export type ComputerUseMcpServerName =
 export const ComputerUseMcpEnv = {
   AskUserUrl: 'LOBSTER_COMPUTER_USE_ASKUSER_URL',
   BridgeSecret: 'LOBSTER_MCP_BRIDGE_SECRET',
+  ClientModulePath: 'LOBSTER_COMPUTER_USE_CLIENT_MODULE',
   ExePath: 'LOBSTER_COMPUTER_USE_EXE',
   HelperStateHome: 'LOBSTER_COMPUTER_USE_HOME',
   LogDir: 'LOBSTER_COMPUTER_USE_LOG_DIR',
@@ -132,6 +133,7 @@ export function resolveComputerUseMcpServer(
   const env: Record<string, string> = {
     [ComputerUseMcpEnv.AskUserUrl]: options.askUserCallbackUrl,
     [ComputerUseMcpEnv.BridgeSecret]: options.bridgeSecret,
+    [ComputerUseMcpEnv.ClientModulePath]: runtimePaths.clientModulePath,
     [ComputerUseMcpEnv.ExePath]: runtimePaths.helperExePath,
     [ComputerUseMcpEnv.HelperStateHome]: ensureComputerUseHelperStateHome(),
     [ComputerUseMcpEnv.LogDir]: ensureComputerUseLogDir(),
@@ -175,7 +177,7 @@ function moduleUrl(...parts) {
 
 const sdkRoot = requireEnv('LOBSTER_COMPUTER_USE_MCP_SDK_ROOT');
 const zodRoot = requireEnv('LOBSTER_COMPUTER_USE_ZOD_ROOT');
-const runtimePackageRoot = requireEnv('LOBSTER_COMPUTER_USE_RUNTIME_PACKAGE_ROOT');
+const clientModulePath = requireEnv('LOBSTER_COMPUTER_USE_CLIENT_MODULE');
 const helperExePath = requireEnv('LOBSTER_COMPUTER_USE_EXE');
 const askUserUrl = requireEnv('LOBSTER_COMPUTER_USE_ASKUSER_URL');
 const bridgeSecret = requireEnv('LOBSTER_MCP_BRIDGE_SECRET');
@@ -184,9 +186,7 @@ const helperStateHome = requireEnv('LOBSTER_COMPUTER_USE_HOME');
 const { McpServer } = await import(moduleUrl(sdkRoot, 'dist', 'esm', 'server', 'mcp.js'));
 const { StdioServerTransport } = await import(moduleUrl(sdkRoot, 'dist', 'esm', 'server', 'stdio.js'));
 const { z } = await import(moduleUrl(zodRoot, 'index.js'));
-const { WindowsComputerUseClient } = await import(
-  moduleUrl(runtimePackageRoot, 'dist', 'project', 'cua', 'sky_js', 'src', 'targets', 'windows', 'internal', 'computer_use_client.js')
-);
+const { WindowsComputerUseClient } = await import(pathToFileURL(clientModulePath).href);
 
 const APPROVED_APP_META_KEY = 'x-oai-cua-approved-app';
 const MAX_TEXT_CHARS = 30000;

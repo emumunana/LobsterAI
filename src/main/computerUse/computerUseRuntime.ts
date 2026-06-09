@@ -8,13 +8,13 @@ import { pipeline } from 'stream/promises';
 
 export const ComputerUseRuntime = {
   Id: 'computer-use',
-  Version: '1.0.3',
+  Version: '1.0.4',
   Platform: 'win32',
   Arch: 'x64',
-  ArchiveName: 'lobsterai-computer-use-runtime-win-x64-1.0.3.zip',
-  DownloadUrl: 'https://ydhardwarebusiness.nosdn.127.net/4814091ade4fa3fdebb2278b04a4cbaf.zip',
-  Sha256: '309df867618557a5b64a30e17f5f2c0e9589c63a5075a8fc8875025f3638adac',
-  SizeBytes: 536486,
+  ArchiveName: 'lobsterai-computer-use-runtime-win-x64-1.0.4.zip',
+  DownloadUrl: 'https://ydhardwarebusiness.nosdn.127.net/e3dd97fabd4fc25b113924d3442d65ee.zip',
+  Sha256: '837b4c50449c1ef9ec58743da0aac1191ea30a6444429705798bde760f611945',
+  SizeBytes: 535505,
 } as const;
 export type ComputerUseRuntime =
   typeof ComputerUseRuntime[keyof typeof ComputerUseRuntime];
@@ -39,6 +39,7 @@ export type ComputerUseHelperConfig =
   typeof ComputerUseHelperConfig[keyof typeof ComputerUseHelperConfig];
 
 export interface ComputerUseRuntimePaths {
+  clientModulePath: string;
   helperExePath: string;
   runtimePackageRoot: string;
   rootDir: string;
@@ -58,25 +59,6 @@ export interface ComputerUseRuntimeDownloadProgress {
 
 const RUNTIME_PLATFORM_DIR = 'win-x64';
 const RUNTIME_STATE_FILE = 'runtime.json';
-const RUNTIME_PACKAGE_RELATIVE_PATH = path.join('node_modules', '@oai', 'sky');
-const HELPER_RELATIVE_PATH = path.join(
-  RUNTIME_PACKAGE_RELATIVE_PATH,
-  'bin',
-  'windows',
-  'lobster-computer-use.exe',
-);
-const WINDOWS_CLIENT_RELATIVE_PATH = path.join(
-  RUNTIME_PACKAGE_RELATIVE_PATH,
-  'dist',
-  'project',
-  'cua',
-  'sky_js',
-  'src',
-  'targets',
-  'windows',
-  'internal',
-  'computer_use_client.js',
-);
 
 function isFile(filePath: string): boolean {
   try {
@@ -159,6 +141,28 @@ function manifestMatches(manifest: Record<string, unknown> | null): boolean {
     && manifest.arch === ComputerUseRuntime.Arch;
 }
 
+function readManifestRelativePath(
+  manifest: Record<string, unknown> | null,
+  key: string,
+): string | null {
+  const value = manifest?.[key];
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const normalized = value.trim().replace(/\\/g, '/');
+  if (!normalized || path.isAbsolute(normalized)) {
+    return null;
+  }
+
+  const parts = normalized.split('/').filter(Boolean);
+  if (parts.length === 0 || parts.some(part => part === '.' || part === '..')) {
+    return null;
+  }
+
+  return path.join(...parts);
+}
+
 export function inspectComputerUseRuntime(
   rootDir = getComputerUseRuntimeRoot(),
 ): ComputerUseRuntimeInspection {
@@ -184,18 +188,36 @@ export function inspectComputerUseRuntime(
     missing.push(RUNTIME_STATE_FILE);
   }
 
-  const runtimePackageRoot = path.join(rootDir, RUNTIME_PACKAGE_RELATIVE_PATH);
-  const helperExePath = path.join(rootDir, HELPER_RELATIVE_PATH);
-  const windowsClientPath = path.join(rootDir, WINDOWS_CLIENT_RELATIVE_PATH);
+  const runtimePackageRootRelativePath = readManifestRelativePath(manifest, 'runtimePackageRoot');
+  const helperRelativePath = readManifestRelativePath(manifest, 'helper');
+  const clientModuleRelativePath = readManifestRelativePath(manifest, 'clientModule');
 
-  if (!isDirectory(runtimePackageRoot)) {
-    missing.push(RUNTIME_PACKAGE_RELATIVE_PATH);
+  if (!runtimePackageRootRelativePath) {
+    missing.push(`${RUNTIME_STATE_FILE}:runtimePackageRoot`);
   }
-  if (!isFile(helperExePath)) {
-    missing.push(HELPER_RELATIVE_PATH);
+  if (!helperRelativePath) {
+    missing.push(`${RUNTIME_STATE_FILE}:helper`);
   }
-  if (!isFile(windowsClientPath)) {
-    missing.push(WINDOWS_CLIENT_RELATIVE_PATH);
+  if (!clientModuleRelativePath) {
+    missing.push(`${RUNTIME_STATE_FILE}:clientModule`);
+  }
+
+  const runtimePackageRoot = runtimePackageRootRelativePath
+    ? path.join(rootDir, runtimePackageRootRelativePath)
+    : '';
+  const helperExePath = helperRelativePath ? path.join(rootDir, helperRelativePath) : '';
+  const clientModulePath = clientModuleRelativePath
+    ? path.join(rootDir, clientModuleRelativePath)
+    : '';
+
+  if (runtimePackageRootRelativePath && !isDirectory(runtimePackageRoot)) {
+    missing.push(runtimePackageRootRelativePath);
+  }
+  if (helperRelativePath && !isFile(helperExePath)) {
+    missing.push(helperRelativePath);
+  }
+  if (clientModuleRelativePath && !isFile(clientModulePath)) {
+    missing.push(clientModuleRelativePath);
   }
 
   if (missing.length > 0) {
@@ -208,7 +230,7 @@ export function inspectComputerUseRuntime(
 
   return {
     missing: [],
-    paths: { helperExePath, rootDir, runtimePackageRoot },
+    paths: { clientModulePath, helperExePath, rootDir, runtimePackageRoot },
     status: ComputerUseRuntimeStatus.Installed,
   };
 }

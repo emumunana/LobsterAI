@@ -48,23 +48,18 @@ describe('resolvePackageRoot', () => {
 
 describe('resolveComputerUseRuntimePaths', () => {
   function writeRuntimeFixture(): {
+    clientModulePath: string;
     helperExePath: string;
     rootDir: string;
     runtimePackageRoot: string;
   } {
     const rootDir = getComputerUseRuntimeRoot();
-    const runtimePackageRoot = path.join(rootDir, 'node_modules', '@oai', 'sky');
+    const runtimePackageRoot = path.join(rootDir, 'node_modules', '@lobsterai', 'computer-use');
     const helperExePath = path.join(runtimePackageRoot, 'bin', 'windows', 'lobster-computer-use.exe');
     const clientPath = path.join(
       runtimePackageRoot,
       'dist',
-      'project',
-      'cua',
-      'sky_js',
-      'src',
-      'targets',
       'windows',
-      'internal',
       'computer_use_client.js',
     );
     fs.mkdirSync(path.dirname(helperExePath), { recursive: true });
@@ -74,20 +69,23 @@ describe('resolveComputerUseRuntimePaths', () => {
       id: ComputerUseRuntime.Id,
       platform: ComputerUseRuntime.Platform,
       version: ComputerUseRuntime.Version,
+      clientModule: 'node_modules/@lobsterai/computer-use/dist/windows/computer_use_client.js',
+      helper: 'node_modules/@lobsterai/computer-use/bin/windows/lobster-computer-use.exe',
+      runtimePackageRoot: 'node_modules/@lobsterai/computer-use',
     })}`);
     fs.writeFileSync(helperExePath, '');
     fs.writeFileSync(clientPath, '');
-    return { helperExePath, rootDir, runtimePackageRoot };
+    return { clientModulePath: clientPath, helperExePath, rootDir, runtimePackageRoot };
   }
 
   test('resolves the installed runtime from userData runtimes directory', () => {
-    const { helperExePath, rootDir, runtimePackageRoot } = writeRuntimeFixture();
+    const { clientModulePath, helperExePath, rootDir, runtimePackageRoot } = writeRuntimeFixture();
 
     const inspection = inspectComputerUseRuntime();
     const paths = resolveComputerUseRuntimePaths();
 
     expect(inspection.missing).toEqual([]);
-    expect(paths).toEqual({ helperExePath, rootDir, runtimePackageRoot });
+    expect(paths).toEqual({ clientModulePath, helperExePath, rootDir, runtimePackageRoot });
   });
 
   test('configures the helper with LobsterAI branding', () => {
@@ -105,6 +103,14 @@ describe('resolveComputerUseRuntimePaths', () => {
     )) as { strings?: { escToCancel?: string; usingComputer?: string } };
 
     expect(server?.env?.[ComputerUseMcpEnv.HelperStateHome]).toBe(helperStateHome);
+    expect(server?.env?.[ComputerUseMcpEnv.ClientModulePath]).toContain(path.join(
+      'node_modules',
+      '@lobsterai',
+      'computer-use',
+      'dist',
+      'windows',
+      'computer_use_client.js',
+    ));
     expect(server?.env?.[ComputerUseMcpEnv.LogDir]).toBe(path.join(TEST_USER_DATA, 'computer-use', 'logs'));
     expect(server?.env?.[ComputerUseMcpEnv.LogLevel]).toBe('info');
     expect(server?.env?.[ComputerUseMcpEnv.LogRetentionDays]).toBe('7');
@@ -117,7 +123,10 @@ describe('resolveComputerUseRuntimePaths', () => {
     const script = fs.readFileSync(scriptPath, 'utf8');
 
     expect(script).toContain("requireEnv('LOBSTER_COMPUTER_USE_HOME')");
+    expect(script).toContain("requireEnv('LOBSTER_COMPUTER_USE_CLIENT_MODULE')");
     expect(script).not.toContain("requireEnv('CODEX_HOME')");
+    expect(script).not.toContain('sky_js');
+    expect(script).not.toContain('@oai');
     expect(script).toContain('function renewHelperTurn()');
     expect(script).toContain('function hasHelperInterruptMarker()');
     expect(script).toContain('function ensureFreshHelperTurn()');
