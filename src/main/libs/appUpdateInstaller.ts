@@ -367,10 +367,13 @@ async function installWindowsNsis(exePath: string): Promise<void> {
   // left the prompt flashing in the taskbar where users never noticed it, so
   // the elevation timed out and the update silently went nowhere.
   //
-  // Quitting in parallel with the installer starting is safe: the NSIS
-  // customInit macro stops remaining LobsterAI processes by image name and
-  // polls until they are gone before replacing files. The installer process
-  // itself is named lobsterai-update-*, so it is not affected by that kill.
+  // Quitting in parallel with the installer starting is safe: once the user
+  // confirms the wizard, the NSIS customCheckAppRunning macro stops remaining
+  // LobsterAI processes by image name and polls until they are gone before
+  // replacing files. The installer process itself is named lobsterai-update-*,
+  // so it is not affected by that kill. Until the user confirms, the installer
+  // touches nothing, so cancelling the wizard leaves the current install
+  // usable (this app instance has quit, but the user can simply relaunch it).
   console.log(`[AppUpdate] Launching Windows installer in the foreground: ${exePath}`);
   const launchError = await shell.openPath(exePath);
   if (launchError) {
