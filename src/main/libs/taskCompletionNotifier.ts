@@ -21,8 +21,11 @@ interface TaskCompletionNotifierOptions {
   updateTrayReminder: (count: number, onClick?: () => void) => void;
 }
 
+const MAX_ACTIVE_NOTIFICATION_REFERENCES = 50;
+
 export class TaskCompletionNotifier {
   private pendingCompletions = new Map<string, PendingCompletionNotification>();
+  private activeNotifications = new Map<string, Notification>();
   private windowsOverlayIcons = new Map<string, Electron.NativeImage>();
 
   constructor(private readonly options: TaskCompletionNotifierOptions) {}
@@ -59,6 +62,7 @@ export class TaskCompletionNotifier {
 
   markSessionViewed(sessionId: string): void {
     if (!this.pendingCompletions.delete(sessionId)) return;
+    this.closeNotification(sessionId);
     console.log(
       `[TaskCompletionNotifier] cleared completed session notification for ${sessionId}; pending count ${this.pendingCompletions.size}`,
     );
@@ -67,6 +71,7 @@ export class TaskCompletionNotifier {
 
   handleSessionDeleted(sessionId: string): void {
     if (!this.pendingCompletions.delete(sessionId)) return;
+    this.closeNotification(sessionId);
     console.log(
       `[TaskCompletionNotifier] removed completed session notification for deleted session ${sessionId}; pending count ${this.pendingCompletions.size}`,
     );
@@ -77,6 +82,7 @@ export class TaskCompletionNotifier {
     if (this.pendingCompletions.size === 0) return;
     const count = this.pendingCompletions.size;
     this.pendingCompletions.clear();
+    this.closeAllNotifications();
     console.log(`[TaskCompletionNotifier] cleared ${count} completed session notifications after ${reason}`);
     this.updateAttentionState();
   }
@@ -99,8 +105,11 @@ export class TaskCompletionNotifier {
       });
       notification.on('click', () => {
         console.log(`[TaskCompletionNotifier] system notification clicked for session ${sessionId}`);
+        this.activeNotifications.delete(sessionId);
         this.openPendingSession(sessionId);
       });
+      this.activeNotifications.set(sessionId, notification);
+      this.pruneActiveNotificationReferences();
       notification.show();
     } catch (error) {
       console.warn(`[TaskCompletionNotifier] failed to show system notification for session ${sessionId}:`, error);
@@ -148,6 +157,34 @@ export class TaskCompletionNotifier {
     if (!iconPath) return undefined;
     const image = nativeImage.createFromPath(iconPath);
     return image.isEmpty() ? undefined : image;
+  }
+
+  private closeNotification(sessionId: string): void {
+    const notification = this.activeNotifications.get(sessionId);
+    if (!notification) return;
+    this.activeNotifications.delete(sessionId);
+    try {
+      notification.close();
+    } catch (error) {
+      console.warn(`[TaskCompletionNotifier] failed to close system notification for session ${sessionId}:`, error);
+    }
+  }
+
+  private closeAllNotifications(): void {
+    for (const sessionId of this.activeNotifications.keys()) {
+      this.closeNotification(sessionId);
+    }
+  }
+
+  private pruneActiveNotificationReferences(): void {
+    while (this.activeNotifications.size > MAX_ACTIVE_NOTIFICATION_REFERENCES) {
+      const oldestSessionId = this.activeNotifications.keys().next().value;
+      if (!oldestSessionId) return;
+      this.closeNotification(oldestSessionId);
+      console.warn(
+        `[TaskCompletionNotifier] closed the oldest system notification because more than ${MAX_ACTIVE_NOTIFICATION_REFERENCES} notifications were active`,
+      );
+    }
   }
 
   private getWindowsOverlayIcon(count: number): Electron.NativeImage {

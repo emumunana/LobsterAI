@@ -65,6 +65,7 @@ import {
 import {
   DataMigrationIpc,
   type DataMigrationLastRestoreResult,
+  DataMigrationRestoreStatus,
 } from '../shared/dataMigration/constants';
 import { DialogIpc } from '../shared/dialog/constants';
 import {
@@ -96,7 +97,7 @@ import { ProviderName } from '../shared/providers';
 import type { ShellOpenFailureReason as ShellOpenFailureReasonType } from '../shared/shell/constants';
 import { ShellOpenFailureReason } from '../shared/shell/constants';
 import { AgentManager } from './agentManager';
-import { APP_NAME, APP_USER_MODEL_ID } from './appConstants';
+import { APP_NAME, APP_USER_MODEL_ID, DB_FILENAME } from './appConstants';
 import { authQuotaGateStateFromQuota, AuthSubscriptionStatus, createDefaultAuthQuotaGateState, normalizeAuthQuota } from './authQuota';
 import { getAutoLaunchEnabled, isAutoLaunched, setAutoLaunchEnabled } from './autoLaunchManager';
 import { type CoworkForkContextMessage, type CoworkMessage, CoworkStore } from './coworkStore';
@@ -177,13 +178,14 @@ import {
   probeCoworkModelReadiness,
 } from './libs/coworkUtil';
 import {
+  assertDataMigrationSqliteSnapshotMatchesLiveSync,
   buildDataMigrationBackupFileName,
   consumeLastRestoreResultSync,
   createMigrationArchive,
   ensureTarGzFileName,
   inspectMigrationArchive,
+  performDataMigrationRestoreSync,
   performPendingDataMigrationRestoreSync,
-  writePendingRestoreRequestSync,
 } from './libs/dataMigration/dataMigrationService';
 import {
   getHtmlSharePublicBaseUrl,
@@ -2293,8 +2295,21 @@ const getTaskCompletionNotifier = (): TaskCompletionNotifier => {
         getStore().get<AppConfigSettings>('app_config')?.notificationSettings,
       focusMainWindow: focusMainWindowForReason,
       openSession: (sessionId: string) => {
-        if (!mainWindow || mainWindow.isDestroyed()) return;
-        mainWindow.webContents.send(CoworkIpcChannel.OpenSessionFromNotification, { sessionId });
+        const targetWindow = mainWindow && !mainWindow.isDestroyed()
+          ? mainWindow
+          : ensureMainWindowForReason?.('task completion notification') ?? null;
+        if (!targetWindow || targetWindow.isDestroyed()) {
+          console.warn(`[TaskCompletionNotifier] could not open session ${sessionId} because no main window was available`);
+          return;
+        }
+
+        pendingOpenSessionFromNotificationId = sessionId;
+        if (targetWindow.webContents.isLoadingMainFrame()) {
+          targetWindow.webContents.once('did-finish-load', flushOpenSessionFromNotification);
+          return;
+        }
+
+        flushOpenSessionFromNotification();
       },
       updateTrayReminder: (count: number, onClick?: () => void) => {
         updateTrayReminder(() => mainWindow, { count, onClick });
@@ -2652,14 +2667,35 @@ const getNotificationIconPath = (): string | null => {
 
 // 保存对主窗口的引用
 let mainWindow: BrowserWindow | null = null;
+let dataMigrationRestoreWindow: BrowserWindow | null = null;
 let taskCompletionNotifier: TaskCompletionNotifier | null = null;
+let ensureMainWindowForReason: ((reason: string) => BrowserWindow | null) | null = null;
+let isOpenSessionFromNotificationReady = false;
+let pendingOpenSessionFromNotificationId: string | null = null;
+
+const flushOpenSessionFromNotification = (): void => {
+  if (!pendingOpenSessionFromNotificationId || !isOpenSessionFromNotificationReady) return;
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (mainWindow.webContents.isLoadingMainFrame()) return;
+
+  const sessionId = pendingOpenSessionFromNotificationId;
+  pendingOpenSessionFromNotificationId = null;
+  console.log(`[TaskCompletionNotifier] opening session ${sessionId} from notification`);
+  mainWindow.webContents.send(CoworkIpcChannel.OpenSessionFromNotification, { sessionId });
+};
 
 const focusMainWindowForReason = (reason: string): void => {
-  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const targetWindow = mainWindow && !mainWindow.isDestroyed()
+    ? mainWindow
+    : ensureMainWindowForReason?.(reason) ?? null;
+  if (!targetWindow || targetWindow.isDestroyed()) {
+    console.warn(`[Main] no main window was available after ${reason}`);
+    return;
+  }
   try {
-    if (mainWindow.isMinimized()) mainWindow.restore();
-    if (!mainWindow.isVisible()) mainWindow.show();
-    if (!mainWindow.isFocused()) mainWindow.focus();
+    if (targetWindow.isMinimized()) targetWindow.restore();
+    if (!targetWindow.isVisible()) targetWindow.show();
+    if (!targetWindow.isFocused()) targetWindow.focus();
     if (process.platform === 'darwin') {
       app.focus({ steal: true });
     }
@@ -2670,6 +2706,7 @@ const focusMainWindowForReason = (reason: string): void => {
 };
 
 let isQuitting = false;
+let isDataMigrationRestoreInProgress = false;
 
 // 存储活跃的流式请求控制器
 const activeStreamControllers = new Map<string, AbortController>();
@@ -2987,6 +3024,10 @@ if (!gotTheLock) {
 
   app.on('second-instance', (_event, commandLine, workingDirectory) => {
     console.debug('[Main] second-instance event', { commandLine, workingDirectory });
+    if (isDataMigrationRestoreInProgress) {
+      console.log('[DataMigration] ignored second-instance activation while restore is in progress.');
+      return;
+    }
 
     // Check for deep link in command line args (Windows/Linux)
     const deepLink = commandLine.find(arg => arg.startsWith('lobsterai://'));
@@ -4931,6 +4972,12 @@ if (!gotTheLock) {
       }
 
       const outputPath = ensureTarGzFileName(saveResult.filePath);
+      if (hasActiveGatewayWorkloads()) {
+        return {
+          success: false,
+          error: t('dataMigrationBackupBlockedByActiveWorkloads'),
+        };
+      }
       const backupManager = sqliteBackupManager ?? new SqliteBackupManager(app.getPath('userData'));
       const sqliteRecord = await backupManager.createBackup({
         db: getStore().getDatabase(),
@@ -4939,6 +4986,10 @@ if (!gotTheLock) {
       const sqliteSnapshotPath = path.join(
         backupManager.getPaths().snapshotsDir,
         sqliteRecord.fileName,
+      );
+      assertDataMigrationSqliteSnapshotMatchesLiveSync(
+        path.join(app.getPath('userData'), DB_FILENAME),
+        sqliteSnapshotPath,
       );
 
       const archive = await createMigrationArchive({
@@ -4964,12 +5015,13 @@ if (!gotTheLock) {
 
   ipcMain.handle(DataMigrationIpc.Restore, async event => {
     const ownerWindow = BrowserWindow.fromWebContents(event.sender);
+    let rendererReleased = false;
     try {
       const openOptions = {
         title: t('dataMigrationRestoreDialogTitle'),
         properties: ['openFile'] as 'openFile'[],
         filters: [
-          { name: t('dataMigrationBackupArchiveFilter'), extensions: ['gz', 'tgz', 'tar'] },
+          { name: t('dataMigrationBackupArchiveFilter'), extensions: ['gz', 'tgz'] },
           { name: t('dataMigrationAllFilesFilter'), extensions: ['*'] },
         ],
       };
@@ -4982,15 +5034,59 @@ if (!gotTheLock) {
 
       const archivePath = openResult.filePaths[0];
       await inspectMigrationArchive(archivePath);
-      writePendingRestoreRequestSync(app.getPath('userData'), archivePath);
-      app.relaunch();
-      app.quit();
-      return { success: true, scheduledRestart: true };
+      isDataMigrationRestoreInProgress = true;
+      isCleanupInProgress = true;
+      isQuitting = true;
+      await releaseRendererWindowsForDataMigrationRestore();
+      rendererReleased = true;
+      await showDataMigrationRestoreProgressWindow();
+      await runAppCleanup('data migration restore');
+      isCleanupFinished = true;
+      isCleanupInProgress = false;
+
+      const restoreResult = performDataMigrationRestoreSync({
+        userDataPath: app.getPath('userData'),
+        rollbackRootPath: path.join(app.getPath('appData'), `${APP_NAME}-migration-rollbacks`),
+        archivePath,
+      });
+      const success = restoreResult?.status === DataMigrationRestoreStatus.Success;
+      console.log(
+        `[DataMigration] restore finished with status ${restoreResult?.status ?? 'unknown'}; `
+        + `rollback archive ${restoreResult?.rollbackPath ?? 'was not created'}.`,
+      );
+      if (!success) {
+        console.error('[DataMigration] restore failed:', restoreResult?.error ?? 'Unknown restore error');
+      }
+      if (rendererReleased) {
+        setTimeout(() => {
+          app.relaunch();
+          app.exit(0);
+        }, 100);
+      }
+      return {
+        success,
+        scheduledRestart: rendererReleased,
+        rollbackPath: restoreResult?.rollbackPath,
+        error: success ? undefined : restoreResult?.error || 'Failed to import LobsterAI data backup',
+      };
     } catch (error) {
+      isCleanupInProgress = false;
+      const message = error instanceof Error ? error.message : 'Failed to import LobsterAI data backup';
       console.error('[DataMigration] restore scheduling failed:', error);
+      if (rendererReleased) {
+        dialog.showErrorBox(t('dataMigrationRestoreDialogTitle'), message);
+        setTimeout(() => {
+          app.relaunch();
+          app.exit(0);
+        }, 100);
+      } else {
+        isDataMigrationRestoreInProgress = false;
+        isQuitting = false;
+      }
       return {
         success: false,
-        error: error instanceof Error ? error.message : 'Failed to import LobsterAI data backup',
+        scheduledRestart: rendererReleased,
+        error: message,
       };
     }
   });
@@ -5537,6 +5633,18 @@ if (!gotTheLock) {
         error: error instanceof Error ? error.message : 'Failed to mark session viewed',
       };
     }
+  });
+
+  ipcMain.handle(CoworkIpcChannel.OpenSessionFromNotificationReady, async event => {
+    if (!mainWindow || mainWindow.isDestroyed() || event.sender.id !== mainWindow.webContents.id) {
+      console.warn('[TaskCompletionNotifier] ignored notification open readiness from an unknown renderer');
+      return { success: false, error: 'Unknown renderer' };
+    }
+
+    isOpenSessionFromNotificationReady = true;
+    console.log('[TaskCompletionNotifier] renderer is ready to open sessions from notifications');
+    flushOpenSessionFromNotification();
+    return { success: true };
   });
 
   ipcMain.handle('cowork:session:delete', async (_event, sessionId: string) => {
@@ -8845,12 +8953,14 @@ if (!gotTheLock) {
   // 创建主窗口
   const createWindow = () => {
     // 如果窗口已经存在，就不再创建新窗口
-    if (mainWindow) {
+    if (mainWindow && !mainWindow.isDestroyed()) {
       if (mainWindow.isMinimized()) mainWindow.restore();
       if (!mainWindow.isVisible()) mainWindow.show();
       if (!mainWindow.isFocused()) mainWindow.focus();
       return;
     }
+    mainWindow = null;
+    isOpenSessionFromNotificationReady = false;
 
     const initialWindowState = resolveInitialAppWindowState(
       getStore().get(AppWindowStoreKey.State),
@@ -9058,6 +9168,9 @@ if (!gotTheLock) {
       },
     );
     mainWindow.webContents.on('did-start-navigation', (_event, _url, isInPlace, isMainFrame) => {
+      if (isMainFrame && !isInPlace) {
+        isOpenSessionFromNotificationReady = false;
+      }
       authCallbackRouter.handleNavigationStarted({ isMainFrame, isInPlace });
     });
 
@@ -9065,6 +9178,7 @@ if (!gotTheLock) {
     mainWindow.on('closed', () => {
       windowStatePersist.cleanup();
       authCallbackRouter.markRendererUnavailable();
+      isOpenSessionFromNotificationReady = false;
       mainWindow = null;
     });
 
@@ -9116,11 +9230,180 @@ if (!gotTheLock) {
     });
   };
 
+  ensureMainWindowForReason = (reason: string): BrowserWindow | null => {
+    if (mainWindow && !mainWindow.isDestroyed()) return mainWindow;
+    console.log(`[Main] recreating main window after ${reason}`);
+    createWindow();
+    return mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
+  };
+
   let isCleanupFinished = false;
   let isCleanupInProgress = false;
 
-  const runAppCleanup = async (): Promise<void> => {
-    console.log('[Main] App is quitting, starting cleanup...');
+  const escapeDataMigrationHtml = (value: string): string => value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+
+  const showDataMigrationRestoreProgressWindow = async (): Promise<void> => {
+    if (dataMigrationRestoreWindow && !dataMigrationRestoreWindow.isDestroyed()) {
+      dataMigrationRestoreWindow.show();
+      dataMigrationRestoreWindow.focus();
+      return;
+    }
+
+    const dark = nativeTheme.shouldUseDarkColors;
+    const windowTitle = t('dataMigrationRestoreProgressTitle');
+    const title = escapeDataMigrationHtml(windowTitle);
+    const desc = escapeDataMigrationHtml(t('dataMigrationRestoreProgressDesc'));
+    const warning = escapeDataMigrationHtml(t('dataMigrationRestoreProgressWarning'));
+    const background = dark ? '#111827' : '#f8fafc';
+    const surface = dark ? '#1f2937' : '#ffffff';
+    const foreground = dark ? '#f9fafb' : '#111827';
+    const secondary = dark ? '#d1d5db' : '#4b5563';
+    const border = dark ? '#374151' : '#e5e7eb';
+    const primary = '#2563eb';
+    const html = `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline';">
+  <title>${title}</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: ${background};
+      color: ${foreground};
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    .panel {
+      width: min(360px, calc(100vw - 40px));
+      border: 1px solid ${border};
+      border-radius: 14px;
+      background: ${surface};
+      padding: 28px 24px;
+      text-align: center;
+      box-shadow: 0 18px 50px rgba(0, 0, 0, 0.18);
+    }
+    .spinner {
+      width: 42px;
+      height: 42px;
+      margin: 0 auto 18px;
+      border-radius: 999px;
+      border: 4px solid rgba(37, 99, 235, 0.18);
+      border-top-color: ${primary};
+      animation: spin 0.9s linear infinite;
+    }
+    h1 {
+      margin: 0;
+      font-size: 17px;
+      line-height: 1.4;
+      font-weight: 650;
+    }
+    p {
+      margin: 12px 0 0;
+      color: ${secondary};
+      font-size: 13px;
+      line-height: 1.65;
+    }
+    .warning {
+      margin-top: 18px;
+      padding: 10px 12px;
+      border-radius: 10px;
+      background: rgba(245, 158, 11, 0.12);
+      color: ${dark ? '#fde68a' : '#92400e'};
+      text-align: left;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <main class="panel">
+    <div class="spinner" aria-hidden="true"></div>
+    <h1>${title}</h1>
+    <p>${desc}</p>
+    <p class="warning">${warning}</p>
+  </main>
+</body>
+</html>`;
+
+    const progressWindow = new BrowserWindow({
+      width: 440,
+      height: 300,
+      resizable: false,
+      minimizable: false,
+      maximizable: false,
+      fullscreenable: false,
+      show: false,
+      title: windowTitle,
+      autoHideMenuBar: true,
+      backgroundColor: background,
+      webPreferences: {
+        nodeIntegration: false,
+        contextIsolation: true,
+        sandbox: true,
+        partition: `data-migration-restore-${Date.now()}`,
+      },
+    });
+    dataMigrationRestoreWindow = progressWindow;
+    progressWindow.setMenu(null);
+    progressWindow.on('closed', () => {
+      if (dataMigrationRestoreWindow === progressWindow) {
+        dataMigrationRestoreWindow = null;
+      }
+    });
+
+    try {
+      await progressWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+    } catch (error) {
+      console.warn('[DataMigration] failed to load restore progress window:', error);
+    }
+    if (!progressWindow.isDestroyed()) {
+      progressWindow.show();
+      progressWindow.focus();
+    }
+  };
+
+  const releaseRendererWindowsForDataMigrationRestore = async (): Promise<void> => {
+    const windows = BrowserWindow.getAllWindows()
+      .filter(win => !win.isDestroyed() && win !== dataMigrationRestoreWindow);
+    if (windows.length === 0) {
+      return;
+    }
+
+    console.log(`[DataMigration] closing ${windows.length} renderer window(s) before restore.`);
+    await Promise.all(windows.map(win => new Promise<void>(resolve => {
+      let resolved = false;
+      let timeout: ReturnType<typeof setTimeout> | null = null;
+      const finish = () => {
+        if (resolved) return;
+        resolved = true;
+        if (timeout) clearTimeout(timeout);
+        resolve();
+      };
+      timeout = setTimeout(finish, 3_000);
+      win.once('closed', finish);
+      try {
+        win.destroy();
+      } catch (error) {
+        console.warn('[DataMigration] failed to destroy renderer window before restore:', error);
+        finish();
+      }
+    })));
+
+    // Give Chromium a short window to release LevelDB handles such as Local Storage on Windows.
+    await new Promise(resolve => { setTimeout(resolve, 500); });
+  };
+
+  const runAppCleanup = async (reason = 'quit'): Promise<void> => {
+    console.log(`[Main] App cleanup started for ${reason}`);
     destroyTray();
     skillManager?.stopWatching();
     stopMediaPollTimer();
@@ -9132,6 +9415,9 @@ if (!gotTheLock) {
     if (coworkEngineRouter) {
       console.log('[Main] Stopping cowork sessions...');
       coworkEngineRouter.stopAllSessions();
+    }
+    if (openClawRuntimeAdapter) {
+      openClawRuntimeAdapter.disconnectGatewayClient();
     }
 
     await stopCoworkOpenAICompatProxy().catch(error => {
@@ -9756,6 +10042,9 @@ if (!gotTheLock) {
 
     // 在 macOS 上，当点击 dock 图标时显示已有窗口或重新创建
     app.on('activate', () => {
+      if (isDataMigrationRestoreInProgress) {
+        return;
+      }
       if (mainWindow && !mainWindow.isDestroyed()) {
         if (!mainWindow.isVisible()) mainWindow.show();
         if (!mainWindow.isFocused()) mainWindow.focus();
@@ -9772,6 +10061,9 @@ if (!gotTheLock) {
 
   // 当所有窗口关闭时退出应用
   app.on('window-all-closed', () => {
+    if (isDataMigrationRestoreInProgress) {
+      return;
+    }
     if (process.platform !== 'darwin') {
       app.quit();
     }

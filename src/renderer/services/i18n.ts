@@ -702,6 +702,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     openClawDataBackupRunning: '正在备份...',
     openClawDataBackupSuccess: '数据备份已保存。',
     openClawDataBackupFailed: '数据备份失败，请重试。',
+    openClawDataBackupSavedTitle: '备份文件已保存',
+    openClawDataBackupSize: '大小',
     openClawDataBackupBlockingTitle: '正在备份 LobsterAI 数据',
     openClawDataBackupBlockingDesc: '备份期间应用会暂时锁定，请等待备份完成后再继续操作。',
     openClawDataBackupBlockingWarning: '请不要关闭应用。关闭应用会中断备份，并可能留下不完整的备份文件。',
@@ -3177,6 +3179,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     openClawDataBackupRunning: 'Backing up...',
     openClawDataBackupSuccess: 'Data backup was saved.',
     openClawDataBackupFailed: 'Failed to back up data. Please try again.',
+    openClawDataBackupSavedTitle: 'Backup file saved',
+    openClawDataBackupSize: 'Size',
     openClawDataBackupBlockingTitle: 'Backing up LobsterAI data',
     openClawDataBackupBlockingDesc:
       'The app is temporarily locked while the backup is running. Wait for the backup to finish before continuing.',

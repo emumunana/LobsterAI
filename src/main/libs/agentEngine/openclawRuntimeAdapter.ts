@@ -1545,6 +1545,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   private gatewayReconnectAttempt = 0;
   /** Set to true before intentionally stopping the client (e.g. version upgrade) to suppress auto-reconnect. */
   private gatewayStoppingIntentionally = false;
+  private gatewayReconnectSuppressed = false;
   private static readonly GATEWAY_RECONNECT_MAX_ATTEMPTS = 10;
   private static readonly GATEWAY_RECONNECT_DELAYS = [2_000, 5_000, 10_000, 15_000, 30_000]; // ms
 
@@ -2687,6 +2688,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
    * for a LobsterAI-initiated session.
    */
   async connectGatewayIfNeeded(): Promise<void> {
+    this.gatewayReconnectSuppressed = false;
     if (this.gatewayClient) {
       console.log('[ChannelSync] connectGatewayIfNeeded: gateway client already exists, skipping');
       return;
@@ -2710,6 +2712,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
    */
   async reconnectGateway(): Promise<void> {
     console.log('[ChannelSync] reconnectGateway: tearing down old client and reconnecting...');
+    this.gatewayReconnectSuppressed = false;
     this.stopGatewayClient();
     try {
       await this.ensureGatewayClientReady();
@@ -2729,6 +2732,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
    */
   disconnectGatewayClient(): void {
     console.log('[ChannelSync] disconnectGatewayClient: explicitly tearing down gateway client');
+    this.gatewayReconnectSuppressed = true;
     this.stopGatewayClient();
   }
 
@@ -4296,6 +4300,10 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
    * Resets the reconnect counter and triggers an immediate reconnect or health check.
    */
   onSystemResume(): void {
+    if (this.gatewayReconnectSuppressed) {
+      console.log('[GatewayReconnect] skipped system resume reconnect because gateway reconnect is suppressed');
+      return;
+    }
     console.log('[GatewayReconnect] system resumed from sleep');
     this.cancelGatewayReconnect();
     this.gatewayReconnectAttempt = 0;
@@ -4311,6 +4319,10 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
    * Called from onClose when the connection drops unexpectedly after a successful handshake.
    */
   private scheduleGatewayReconnect(): void {
+    if (this.gatewayReconnectSuppressed) {
+      console.log('[GatewayReconnect] skipped reconnect scheduling because gateway reconnect is suppressed');
+      return;
+    }
     if (this.gatewayReconnectAttempt >= OpenClawRuntimeAdapter.GATEWAY_RECONNECT_MAX_ATTEMPTS) {
       console.error('[GatewayReconnect] max attempts reached (' + OpenClawRuntimeAdapter.GATEWAY_RECONNECT_MAX_ATTEMPTS + '), giving up. Restart the app to reconnect.');
       return;
@@ -4329,6 +4341,10 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   }
 
   private async attemptGatewayReconnect(): Promise<void> {
+    if (this.gatewayReconnectSuppressed) {
+      console.log('[GatewayReconnect] skipped reconnect attempt because gateway reconnect is suppressed');
+      return;
+    }
     console.log(`[GatewayReconnect] attempting reconnect (attempt ${this.gatewayReconnectAttempt})`);
     try {
       // connectGatewayIfNeeded checks if client already exists, so safe to call

@@ -27,6 +27,7 @@ export interface DataMigrationRestoreScheduleResult {
   success: boolean;
   canceled?: boolean;
   scheduledRestart?: boolean;
+  rollbackPath?: string;
   error?: string;
 }
 

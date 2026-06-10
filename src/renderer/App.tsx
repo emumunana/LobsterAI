@@ -825,6 +825,7 @@ const App: React.FC = () => {
       setMainView('cowork');
       void coworkService.loadSession(sessionId);
     });
+    void window.electron.cowork.notifyOpenSessionFromNotificationReady?.();
     return unsubscribe;
   }, []);
 

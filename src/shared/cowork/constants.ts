@@ -12,6 +12,7 @@ export const CoworkIpcChannel = {
   SubagentDelete: 'cowork:subagent:delete',
   MarkSessionViewed: 'cowork:session:markViewed',
   OpenSessionFromNotification: 'cowork:session:openFromNotification',
+  OpenSessionFromNotificationReady: 'cowork:session:openFromNotificationReady',
 } as const;
 export type CoworkIpcChannel = typeof CoworkIpcChannel[keyof typeof CoworkIpcChannel];
 

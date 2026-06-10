@@ -765,6 +765,7 @@ interface IElectronAPI {
     }) => Promise<{ success: boolean; error?: string }>;
     getConfig: () => Promise<{ success: boolean; config?: CoworkConfig; error?: string }>;
     setConfig: (config: CoworkConfigUpdate) => Promise<{ success: boolean; error?: string }>;
+    notifyOpenSessionFromNotificationReady: () => Promise<{ success: boolean; error?: string }>;
     onOpenSessionFromNotification: (
       callback: (data: { sessionId: string }) => void,
     ) => () => void;
