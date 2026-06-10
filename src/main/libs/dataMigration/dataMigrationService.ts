@@ -110,6 +110,7 @@ const SOURCE_EXCLUDED_TOP_LEVEL_NAMES = new Set([
   'lockfile',
   'runtimes',
   'skill-migrate.log',
+  'sqlite-backups',
   PENDING_RESTORE_FILE_NAME,
   LAST_RESTORE_RESULT_FILE_NAME,
 ]);
@@ -117,6 +118,7 @@ const SOURCE_EXCLUDED_TOP_LEVEL_NAMES = new Set([
 const RESTORE_PRESERVED_TOP_LEVEL_NAMES = new Set([
   'Cache',
   'Code Cache',
+  'cowork',
   'Dictionaries',
   'GPUCache',
   'DawnGraphiteCache',
@@ -137,9 +139,12 @@ const RESTORE_PRESERVED_TOP_LEVEL_NAMES = new Set([
   'blob_storage',
   'Crashpad',
   'install-timing.log',
+  SQLITE_BACKUP_TOP_LEVEL_DIR_NAME,
   'logs',
   'lockfile',
+  'runtimes',
   'skill-migrate.log',
+  'sqlite-backups',
   PENDING_RESTORE_FILE_NAME,
   LAST_RESTORE_RESULT_FILE_NAME,
 ]);
@@ -160,6 +165,7 @@ const EXCLUDED_RELATIVE_PATHS = [
 
 const RESTORE_PRESERVED_RELATIVE_PATHS = [
   'openclaw/logs',
+  'openclaw/mcp-packages',
   'openclaw/state/logs',
 ];
 
