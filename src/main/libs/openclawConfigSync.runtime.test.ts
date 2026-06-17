@@ -713,7 +713,7 @@ describe('OpenClawConfigSync runtime config output', () => {
   });
 
   test('repairs stale image capability for known Qwen models before writing OpenClaw input', async () => {
-    const { ProviderName } = await import('../../shared/providers');
+    const { OpenClawProviderId, ProviderName } = await import('../../shared/providers');
     const { buildProviderSelection } = await import('./openclawConfigSync');
 
     const qwenSelection = buildProviderSelection({
@@ -726,6 +726,10 @@ describe('OpenClawConfigSync runtime config output', () => {
       supportsImage: false,
       modelName: 'qwen3.6-plus',
     });
+    expect(qwenSelection.providerId).toBe(OpenClawProviderId.Qwen);
+    expect(qwenSelection.primaryModel).toBe(`${OpenClawProviderId.Qwen}/qwen3.6-plus`);
+    expect(qwenSelection.providerId).not.toBe('qwen-portal');
+    expect(qwenSelection.providerId).not.toBe('qwen-oauth');
     expect(qwenSelection.providerConfig.models[0].input).toEqual(['text', 'image']);
 
     const customSelection = buildProviderSelection({

@@ -2,6 +2,7 @@ import { describe,expect, test } from 'vitest';
 
 import {
   ApiFormat,
+  OpenClawProviderId,
   ProviderName,
   ProviderRegistry,
 } from './constants';
@@ -80,6 +81,11 @@ describe('ProviderRegistry', () => {
     expect(ProviderRegistry.resolveModelSupportsImage('custom_0', 'qwen3.6-plus', false)).toBe(true);
     expect(ProviderRegistry.resolveModelSupportsImage('custom_0', 'unknown-model', false)).toBe(false);
     expect(ProviderRegistry.resolveModelSupportsImage('custom_0', 'unknown-model', true)).toBe(true);
+  });
+
+  test('qwen maps to the API-key provider instead of the OAuth alias', () => {
+    expect(ProviderRegistry.getOpenClawProviderId(ProviderName.Qwen)).toBe(OpenClawProviderId.Qwen);
+    expect(OpenClawProviderId.Qwen).toBe('qwen');
   });
 
   test('resolveModelSupportsThinking preserves known reasoning model metadata', () => {

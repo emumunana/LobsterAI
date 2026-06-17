@@ -125,8 +125,8 @@ openclaw-empty-sse-data.patch
 | `openclaw-mcp-shared-runtime.patch` | 待处理 | 尚未评估；需确认 MCP runtime 复用需求是否仍存在 |
 | `openclaw-mcp-stdio-process-tree-kill.patch` | 待处理 | 尚未评估；需确认 stdio MCP 进程树清理是否仍需补丁 |
 | `openclaw-memory-atomic-reindex-ebusy-retry.patch` | 待处理 | 尚未评估；需确认 Windows EBUSY retry 是否已由上游覆盖 |
-| `openclaw-qwen-coding-plan-qwen36-plus.patch` | 待处理 | 尚未评估；需确认 Qwen 3.6 Plus coding plan 支持是否仍需定制 |
-| `openclaw-qwen-vision-catalog-fallback.patch` | 待处理 | 尚未评估；需确认 Qwen vision catalog fallback 是否仍需 patch |
+| `openclaw-qwen-coding-plan-qwen36-plus.patch` | 不再需要迁移 | OpenClaw 6.1 仍在内置 Qwen Coding Plan catalog 中隐藏 `qwen3.6-plus`，但 embedded runner 已支持显式 `models.providers.qwen.models[]` 配置优先于 conditional suppression；LobsterAI 当前会显式写出 provider model，因此本场景暂不迁移旧补丁，保留观察 |
+| `openclaw-qwen-vision-catalog-fallback.patch` | 不再需要迁移 | OpenClaw 6.1 已将 `models.providers[*].models[*]` 合并进 model catalog，LobsterAI 写出的 `input: ["text", "image"]` 可被识图能力判断读取；实测 Qwen plan mode `qwen3.7-plus` 可正常识图 |
 | `openclaw-skip-derive-prompt-segments-deadloop.patch` | 待处理 | 尚未评估；需确认 derivePromptSegments 死循环问题是否仍存在 |
 | `openclaw-subagent-cleanup-finalize-best-effort.patch` | 待处理 | 尚未评估；需确认 subagent cleanup/finalize 失败是否仍会影响主流程 |
 | `openclaw-web-fetch-env-proxy.patch` | 不再需要迁移 | 旧补丁字段为 `tools.web.fetch.useEnvProxy`；OpenClaw 6.1 已提供 `tools.web.fetch.useTrustedEnvProxy`、cache key 隔离和 env proxy dispatcher 测试。LobsterAI 当前配置同步不再写出旧字段，也不自动写出新字段 |
@@ -144,6 +144,18 @@ openclaw-empty-sse-data.patch
 LobsterAI 侧处理边界：`customParams` 只作为厂商请求参数透传到 `extra_body`，不再反向推断模型是否支持 thinking。套餐模型依赖服务端模型 metadata 下发的 `supportsThinking`；内置 provider 模型依赖 LobsterAI 静态模型表中的精确 `supportsThinking`；自定义模型需要用户显式配置 `supportsThinking: true` 后才会同步为 OpenClaw `reasoning: true`。同时，LobsterAI 的 assistant stream/history thinking 提取增加了顶层 `reasoning_content` / `reasoning` / `reasoning_text` 兜底。
 
 已按 OpenClaw 6.1 manifest / provider catalog 中明确的 `reasoning: true`，以及业务侧确认的模型能力，补齐 LobsterAI 当前静态模型表中的精确模型，例如 DeepSeek V4 / Reasoner、Kimi K2.5 / K2.6、Zhipu GLM、MiniMax M3、Volcengine 当前内置模型、Youdao DeepSeek Reasoner、Qianfan GLM / DeepSeek V4、Xiaomi MiMo、OpenAI GPT-5.4 / GPT-5.5、Gemini 3.x、Anthropic Claude 4.x，以及 OpenRouter 中对应的 Claude / GPT / Gemini 模型。Qwen 3.5 / 3.6 待后续确认；其他未确认模型不做泛化标记。
+
+### 3.2 Qwen provider alias 复核
+
+2026-06-17 排查 `Unknown model: qwen-oauth/qwen3.6-plus` 后确认，LobsterAI 生成的 `openclaw.json` 已经包含 `qwen-portal/qwen3.6-plus` 与显式 provider model，但 OpenClaw 6.1 的 Qwen 插件将 `qwen-portal` 作为 `qwen-oauth` 的 catalog/auth alias，而标准 DashScope API key provider 的运行时 id 是 `qwen`。因此在标准 `dashscope.aliyuncs.com/compatible-mode/v1` 场景下，LobsterAI 不应继续写出 `qwen-portal`，否则 OpenClaw 可能在运行时按 `qwen-oauth/qwen3.6-plus` 解析并找不到模型。
+
+本轮优先在 LobsterAI 侧修复：`ProviderRegistry` 的 Qwen OpenClaw provider id 改为 `qwen`，使内置 Qwen / 标准 DashScope 自定义使用 `qwen/qwen3.6-plus` 进入 OpenClaw。后续复核两个 Qwen 旧补丁后确认，LobsterAI 当前显式写出 provider model 的路径不再需要迁移旧 patch；但 OpenClaw 原生 wizard/default catalog 对 Qwen Coding Plan 的默认展示策略仍与 LobsterAI 显式配置路径不同。
+
+### 3.3 Qwen 旧补丁迁移复核
+
+2026-06-17 复核 `openclaw-qwen-vision-catalog-fallback.patch` 后确认，旧补丁的核心诉求已由 OpenClaw 6.1 覆盖：`loadModelCatalog()` 会合并 `buildConfiguredModelCatalog()`，而后者会从 `models.providers[*].models[]` 读取 `input`、`reasoning`、`contextWindow` 等显式模型元数据。LobsterAI 生成 Qwen provider model 时会写出 `input: ["text", "image"]`，并且用户已验证 plan mode 下 `qwen3.7-plus` 可以正常识图，因此该补丁不再迁移。
+
+2026-06-17 复核 `openclaw-qwen-coding-plan-qwen36-plus.patch` 后确认，OpenClaw 6.1 仍保留内置限制：Qwen Coding Plan endpoint 的默认 catalog 不 advertise `qwen3.6-plus`，且 manifest 中仍有 conditional suppression。但 embedded runner 已新增显式配置优先逻辑：当 `models.providers.qwen.models[]` 中显式声明 `qwen3.6-plus` 时，可以绕过基于 baseUrl 的 conditional suppression。LobsterAI 当前正是显式写 provider model 的集成方式，因此不再迁移旧补丁；若未来改为依赖 OpenClaw 原生 Qwen wizard/default catalog，则需重新评估该结论。
 
 ## 4. 实施步骤
 
@@ -163,6 +175,8 @@ LobsterAI 侧处理边界：`customParams` 只作为厂商请求参数透传到 
 12. 确认 `openclaw-extra-body-passthrough.patch`、`openclaw-codex-use-native-transport.patch` 不再需要迁移，并补充 LobsterAI 侧决策测试。
 13. 调整 `scripts/build-openclaw-runtime.sh`，避免 OpenClaw `v2026.6.1` 在 `npm pack` 阶段通过 `prepack` 触发第二次 `pnpm build` / `tsdown`；相关构建验证按本轮要求暂未执行，待手动测试。
 14. 修复 thinking 模型元数据同步：通过明确的 `supportsThinking` 来源写出 OpenClaw `reasoning: true`，`customParams` 仅保留为 `extra_body` 透传；同时补充 `reasoning_content` 顶层字段提取兜底。
+15. 修复 Qwen 标准 provider id：LobsterAI 侧改为向 OpenClaw 写出 `qwen/qwen3.6-plus`，避免 `qwen-portal` 被 OpenClaw 6.1 视为 `qwen-oauth` alias 后触发 `Unknown model: qwen-oauth/qwen3.6-plus`。
+16. 复核两个 Qwen 旧补丁：确认 `openclaw-qwen-vision-catalog-fallback.patch` 与 `openclaw-qwen-coding-plan-qwen36-plus.patch` 在 LobsterAI 显式 provider model 路径下均不再需要迁移。
 
 ### 4.2 待处理
 

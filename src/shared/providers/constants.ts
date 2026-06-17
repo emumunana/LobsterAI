@@ -56,7 +56,7 @@ export const OpenClawProviderId = {
   OpenAICodex: 'openai-codex',
   DeepSeek: 'deepseek',
   Qianfan: 'qianfan',
-  Qwen: 'qwen-portal', // OpenClaw normalizes 'qwen' → 'qwen-portal'; use canonical ID to avoid config diff loop
+  Qwen: 'qwen',
   Zai: 'zai', // OpenClaw official provider ID for Zhipu/GLM
   Volcengine: 'volcengine',
   Minimax: 'minimax',
