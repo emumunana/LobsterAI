@@ -153,9 +153,125 @@ const SettingsAnalyticsSource = {
   AgentEngine: 'settings_agent_engine',
   Appearance: 'settings_appearance',
   General: 'settings_general',
+  Model: 'settings_model',
 } as const;
 
 type SettingsAnalyticsValue = string | boolean | number;
+type ProviderAnalyticsKind = 'builtin' | 'custom' | 'local';
+
+type CustomModelSettingsAnalyticsSummary = {
+  changedKeys: string;
+  changedProviderCount: number;
+  customProviderCount: number;
+  customProviderModelCount: number;
+  enabledCustomProviderCount: number;
+  enabledProviderCount: number;
+  hasCodingPlanEnabled: boolean;
+  hasLocalProviderEnabled: boolean;
+  modelCount: number;
+};
+
+const isCustomProviderKey = (providerKey: string): boolean => (
+  (CUSTOM_PROVIDER_KEYS as readonly string[]).includes(providerKey)
+);
+
+const isLocalProviderKey = (providerKey: string): boolean => (
+  providerKey === ProviderName.Ollama || providerKey === ProviderName.LmStudio
+);
+
+const resolveProviderAnalyticsKind = (providerKey: string): ProviderAnalyticsKind => {
+  if (isCustomProviderKey(providerKey)) {
+    return 'custom';
+  }
+  if (isLocalProviderKey(providerKey)) {
+    return 'local';
+  }
+  return 'builtin';
+};
+
+const countProviderModels = (providerConfig?: ProviderConfig): number => (
+  Array.isArray(providerConfig?.models) ? providerConfig.models.length : 0
+);
+
+const getProviderAuthTypeForAnalytics = (providerConfig?: ProviderConfig): string => (
+  providerConfig?.authType || ProviderAuthType.ApiKey
+);
+
+const getProviderApiFormatForAnalytics = (providerKey: string, providerConfig?: ProviderConfig): string => (
+  getEffectiveApiFormat(providerKey, providerConfig?.apiFormat)
+);
+
+const buildCustomModelSettingsAnalyticsSummary = (
+  previousProviders: ProvidersConfig,
+  nextProviders: ProvidersConfig,
+): CustomModelSettingsAnalyticsSummary | null => {
+  const changedKeys = new Set<string>();
+  const changedProviders = new Set<string>();
+  const providerKeysForDiff = new Set([
+    ...Object.keys(previousProviders),
+    ...Object.keys(nextProviders),
+  ]);
+
+  providerKeysForDiff.forEach(providerKey => {
+    const previousProvider = previousProviders[providerKey];
+    const nextProvider = nextProviders[providerKey];
+
+    if (!previousProvider || !nextProvider) {
+      changedKeys.add('provider_count');
+      changedProviders.add(providerKey);
+      return;
+    }
+
+    let providerChanged = false;
+    if ((previousProvider.enabled === true) !== (nextProvider.enabled === true)) {
+      changedKeys.add('provider_enabled');
+      providerChanged = true;
+    }
+    if (getProviderApiFormatForAnalytics(providerKey, previousProvider) !== getProviderApiFormatForAnalytics(providerKey, nextProvider)) {
+      changedKeys.add('api_format');
+      providerChanged = true;
+    }
+    if (((previousProvider as ProviderConfig).codingPlanEnabled === true) !== ((nextProvider as ProviderConfig).codingPlanEnabled === true)) {
+      changedKeys.add('coding_plan');
+      providerChanged = true;
+    }
+    if (getProviderAuthTypeForAnalytics(previousProvider) !== getProviderAuthTypeForAnalytics(nextProvider)) {
+      changedKeys.add('auth_type');
+      providerChanged = true;
+    }
+    if (countProviderModels(previousProvider) !== countProviderModels(nextProvider)) {
+      changedKeys.add('model_count');
+      providerChanged = true;
+    }
+
+    if (providerChanged) {
+      changedProviders.add(providerKey);
+    }
+  });
+
+  if (changedKeys.size === 0) {
+    return null;
+  }
+
+  const nextProviderEntries = Object.entries(nextProviders);
+  return {
+    changedKeys: Array.from(changedKeys).sort().join(','),
+    changedProviderCount: changedProviders.size,
+    customProviderCount: nextProviderEntries.filter(([providerKey]) => isCustomProviderKey(providerKey)).length,
+    customProviderModelCount: nextProviderEntries
+      .filter(([providerKey]) => isCustomProviderKey(providerKey))
+      .reduce((count, [, providerConfig]) => count + countProviderModels(providerConfig), 0),
+    enabledCustomProviderCount: nextProviderEntries
+      .filter(([providerKey, providerConfig]) => isCustomProviderKey(providerKey) && providerConfig.enabled === true)
+      .length,
+    enabledProviderCount: nextProviderEntries.filter(([, providerConfig]) => providerConfig.enabled === true).length,
+    hasCodingPlanEnabled: nextProviderEntries.some(([, providerConfig]) => (providerConfig as ProviderConfig).codingPlanEnabled === true),
+    hasLocalProviderEnabled: nextProviderEntries.some(([providerKey, providerConfig]) => (
+      isLocalProviderKey(providerKey) && providerConfig.enabled === true
+    )),
+    modelCount: nextProviderEntries.reduce((count, [, providerConfig]) => count + countProviderModels(providerConfig), 0),
+  };
+};
 
 const reportGeneralSettingChanged = (
   settingKey: string,
@@ -211,6 +327,34 @@ const reportAgentEngineMaintenanceAction = (
     errorCode: options.errorCode,
     sizeBytes: options.sizeBytes,
     source: SettingsAnalyticsSource.AgentEngine,
+  });
+};
+
+const reportCustomModelSettingsSaved = (
+  summary: CustomModelSettingsAnalyticsSummary,
+): void => {
+  void reportYdAnalyzer({
+    action: LogReporterAction.CustomModelSettingsSaved,
+    source: SettingsAnalyticsSource.Model,
+    ...summary,
+  });
+};
+
+const reportCustomModelConnectionTested = (
+  providerKey: ProviderType,
+  apiFormat: string,
+  result: 'success' | 'failed',
+  options: { failureReason?: string; statusCode?: number } = {},
+): void => {
+  void reportYdAnalyzer({
+    action: LogReporterAction.CustomModelConnectionTested,
+    source: SettingsAnalyticsSource.Model,
+    providerKey,
+    providerKind: resolveProviderAnalyticsKind(providerKey),
+    apiFormat,
+    result,
+    failureReason: options.failureReason,
+    statusCode: options.statusCode,
   });
 };
 
@@ -1538,20 +1682,33 @@ const Settings: React.FC<SettingsProps> = ({
     setPendingDeleteProvider(key);
   };
 
-  const confirmDeleteCustomProvider = () => {
+  const confirmDeleteCustomProvider = async () => {
     const key = pendingDeleteProvider;
     if (!key) return;
     setPendingDeleteProvider(null);
+    const currentConfig = configService.getConfig();
     setProviders(prev => {
       const next = { ...prev };
       delete next[key];
       return next;
     });
     // Persist the deletion immediately so it survives window close
-    const currentConfig = configService.getConfig();
     const updatedProviders = { ...currentConfig.providers };
     delete updatedProviders[key];
-    configService.updateConfig({ providers: updatedProviders as AppConfig['providers'] });
+    try {
+      await configService.updateConfig({ providers: updatedProviders as AppConfig['providers'] });
+      if (usageAnalyticsEnabled) {
+        const customModelSettingsSummary = buildCustomModelSettingsAnalyticsSummary(
+          (currentConfig.providers ?? providers) as ProvidersConfig,
+          updatedProviders as ProvidersConfig,
+        );
+        if (customModelSettingsSummary) {
+          reportCustomModelSettingsSaved(customModelSettingsSummary);
+        }
+      }
+    } catch (deleteError) {
+      console.warn('[Settings] failed to persist custom provider deletion:', deleteError);
+    }
     // If the deleted provider was active, switch to first visible
     if (activeProvider === key) {
       const visibleKeys = Object.keys(visibleProviders).filter(k => k !== key) as ProviderType[];
@@ -2394,6 +2551,9 @@ const Settings: React.FC<SettingsProps> = ({
         webFetch: defaultBrowserWebAccessConfig.webFetch,
       });
       const previousConfig = configService.getConfig();
+      const previousProviders = previousConfig.providers
+        ? normalizeProvidersForSettingsSave(previousConfig.providers as ProvidersConfig)
+        : normalizedProviders;
       const previousSkipMissedJobs = coworkConfig.skipMissedJobs ?? true;
       const previousAgentEngine = coworkConfig.agentEngine || 'openclaw';
       const previousOpenClawSessionKeepAlive = coworkConfig.openClawSessionPolicy?.keepAlive
@@ -2545,6 +2705,13 @@ const Settings: React.FC<SettingsProps> = ({
             openClawSessionKeepAlive,
             previousOpenClawSessionKeepAlive,
           );
+        }
+        const customModelSettingsSummary = buildCustomModelSettingsAnalyticsSummary(
+          previousProviders,
+          normalizedProviders,
+        );
+        if (customModelSettingsSummary) {
+          reportCustomModelSettingsSaved(customModelSettingsSummary);
         }
         if (previousConfig.usageAnalyticsEnabled === false) {
           void reportYdAnalyzer({
@@ -2833,6 +3000,7 @@ const Settings: React.FC<SettingsProps> = ({
   const handleTestConnection = async () => {
     const testingProvider = activeProvider;
     const providerConfig = providers[testingProvider];
+    const testingApiFormat = getEffectiveApiFormat(testingProvider, providerConfig.apiFormat);
     setIsTesting(true);
     setIsTestResultModalOpen(false);
     setTestResult(null);
@@ -2841,6 +3009,9 @@ const Settings: React.FC<SettingsProps> = ({
 
 
     if (providerRequiresApiKey(testingProvider) && !hasValidAuth) {
+      reportCustomModelConnectionTested(testingProvider, testingApiFormat, 'failed', {
+        failureReason: 'missing_api_key',
+      });
       showTestResultModal({ success: false, message: i18nService.t('apiKeyRequired') }, testingProvider);
       setIsTesting(false);
       return;
@@ -2849,6 +3020,9 @@ const Settings: React.FC<SettingsProps> = ({
     // 获取第一个可用模型 - use a shallow copy to avoid mutating state
     const originalModel = providerConfig.models?.[0];
     if (!originalModel) {
+      reportCustomModelConnectionTested(testingProvider, testingApiFormat, 'failed', {
+        failureReason: 'missing_model',
+      });
       showTestResultModal({ success: false, message: i18nService.t('noModelsConfigured') }, testingProvider);
       setIsTesting(false);
       return;
@@ -2859,8 +3033,8 @@ const Settings: React.FC<SettingsProps> = ({
     try {
       let response: Awaited<ReturnType<typeof window.electron.api.fetch>>;
       // Apply Coding Plan endpoint switch
-      let effectiveBaseUrl = resolveBaseUrl(testingProvider, providerConfig.baseUrl, getEffectiveApiFormat(testingProvider, providerConfig.apiFormat));
-      let effectiveApiFormat = getEffectiveApiFormat(testingProvider, providerConfig.apiFormat);
+      let effectiveBaseUrl = resolveBaseUrl(testingProvider, providerConfig.baseUrl, testingApiFormat);
+      let effectiveApiFormat = testingApiFormat;
 
       // Handle Coding Plan endpoint switch for supported providers
       if ((providerConfig as { codingPlanEnabled?: boolean }).codingPlanEnabled && (effectiveApiFormat === 'anthropic' || effectiveApiFormat === 'openai')) {
@@ -2877,6 +3051,9 @@ const Settings: React.FC<SettingsProps> = ({
       if (testingProvider === ProviderName.Copilot) {
         const result = await window.electron.githubCopilot.refreshToken();
         if (!result.success || !result.token) {
+          reportCustomModelConnectionTested(testingProvider, effectiveApiFormat, 'failed', {
+            failureReason: 'unknown',
+          });
           showTestResultModal({
             success: false,
             message: result.error || i18nService.t('apiKeyRequired'),
@@ -2976,6 +3153,7 @@ const Settings: React.FC<SettingsProps> = ({
 
       if (response.ok) {
         enableProvider(testingProvider);
+        reportCustomModelConnectionTested(testingProvider, effectiveApiFormat, 'success');
         showTestResultModal({ success: true, message: i18nService.t('connectionSuccess') }, testingProvider);
       } else {
         const data = response.data || {};
@@ -2983,12 +3161,20 @@ const Settings: React.FC<SettingsProps> = ({
         const errorMessage = data.error?.message || data.message || `${i18nService.t('connectionFailed')}: ${response.status}`;
         if (typeof errorMessage === 'string' && errorMessage.toLowerCase().includes('model output limit was reached')) {
           enableProvider(testingProvider);
+          reportCustomModelConnectionTested(testingProvider, effectiveApiFormat, 'success');
           showTestResultModal({ success: true, message: i18nService.t('connectionSuccess') }, testingProvider);
           return;
         }
+        reportCustomModelConnectionTested(testingProvider, effectiveApiFormat, 'failed', {
+          failureReason: 'http_error',
+          statusCode: response.status,
+        });
         showTestResultModal({ success: false, message: errorMessage }, testingProvider);
       }
     } catch (err) {
+      reportCustomModelConnectionTested(testingProvider, testingApiFormat, 'failed', {
+        failureReason: 'network_error',
+      });
       showTestResultModal({
         success: false,
         message: err instanceof Error ? err.message : i18nService.t('connectionFailed'),

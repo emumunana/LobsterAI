@@ -240,6 +240,48 @@ export const LogReporterActionPrefix = {
   - `source`：string，触发来源。当前固定为 `settings_agent_engine`。
 - 隐私边界：不上传备份文件路径、导入文件路径、OpenClaw gateway URL、错误详情文本或本地配置内容。
 
+#### 2.4.12 `lobsterai_custom_model_settings_saved`
+
+- 状态：已实现。
+- 触发时机：用户在「设置 -> 自定义模型」修改 provider 或模型配置，并成功保存后发送；删除自定义 provider 这类即时持久化动作在确认删除且持久化成功后发送。未保存、保存失败或仅切换 provider tab 不发送。
+- 事件含义：用较粗粒度统计用户自定义模型配置情况，避免对每个输入框或每个模型编辑动作做过细埋点。
+- 发送口径：
+  - 根据保存前后的 `providers` 配置做 diff，仅当 provider 开关、API 协议、Coding Plan 开关、鉴权类型、provider 数量或模型数量发生变化时发送。
+  - 同一次保存只发送一条摘要事件，不按 provider 或 model 逐条发送。
+  - 自定义 provider 的新增、删除、启用状态变化，都归入该摘要事件。
+- 业务参数：
+  - `source`：string，触发来源。当前固定为 `settings_model`。
+  - `changedProviderCount`：number，本次保存中发生配置变化的 provider 数量。
+  - `enabledProviderCount`：number，保存后的已启用 provider 数量。
+  - `customProviderCount`：number，保存后的自定义 provider 数量，例如 `custom_0`、`custom_1` 等。
+  - `enabledCustomProviderCount`：number，保存后的已启用自定义 provider 数量。
+  - `modelCount`：number，保存后的模型总数，仅统计当前 providers 配置中的模型条目数量。
+  - `customProviderModelCount`：number，保存后的自定义 provider 模型数量。
+  - `hasLocalProviderEnabled`：boolean，保存后是否启用了本地模型 provider，例如 `ollama` 或 `lm-studio`。
+  - `hasCodingPlanEnabled`：boolean，保存后是否存在已开启 Coding Plan 的 provider。
+  - `changedKeys`：string，本次变化类型的去重列表，使用逗号分隔。当前规划取值包括 `provider_enabled`、`provider_count`、`api_format`、`coding_plan`、`auth_type`、`model_count`。
+- 隐私边界：
+  - 不上传 API Key、OAuth token、base URL、provider displayName、模型名称、模型 ID、customParams、导入/导出文件名或本地路径。
+  - 不上传具体自定义 provider 编号列表，只上传数量和是否启用等摘要字段。
+  - `modelCount` 仅用于统计配置规模，不表达用户是否实际使用某个模型；实际选择模型仍以 `lobsterai_model_selected` 为准。
+
+#### 2.4.13 `lobsterai_custom_model_connection_tested`
+
+- 状态：已实现。
+- 触发时机：用户在「设置 -> 自定义模型」点击测试连接，并得到测试结果后发送。缺少 API Key、缺少模型导致测试无法发起时也发送失败分类；用户未点击测试不发送。
+- 事件含义：统计自定义模型 provider 的连接可用性和配置成功率。
+- 业务参数：
+  - `source`：string，触发来源。当前固定为 `settings_model`。
+  - `providerKey`：string，被测试 provider 的配置 key，例如 `openai`、`anthropic`、`custom_0`、`ollama`。
+  - `providerKind`：string，provider 类型。当前规划取值为 `builtin`、`custom`、`local`。
+  - `apiFormat`：string，测试时使用的 API 协议。当前规划取值为 `openai`、`anthropic`、`gemini`。
+  - `result`：string，测试结果。当前规划取值为 `success`、`failed`。
+  - `failureReason`：string，失败分类。当前规划取值包括 `missing_api_key`、`missing_model`、`http_error`、`network_error`、`unknown`；仅失败时发送。
+  - `statusCode`：number，HTTP 失败时的状态码；无法获取时不发送。
+- 隐私边界：
+  - 不上传测试请求 URL、API Key、请求头、请求体、模型名称、模型 ID 或服务端错误详情。
+  - 不上传完整错误 message，因为供应商错误内容可能包含地址、账号、token 片段或其他敏感信息。
+
 ### 2.5 请求流程
 
 ```text
@@ -296,7 +338,7 @@ void reportYdAnalyzer({
 
 1. 定义下一批事件名称、触发时机和允许上报的参数。
 2. 定义安装、技能、MCP、专家套件、模型和其他功能的统计口径。
-3. 确定自定义技能、自定义 MCP 和自定义模型信息的上报边界。
+3. 确定自定义技能和自定义 MCP 信息的上报边界。
 4. 继续评估是否需要补充分发渠道之外的其他通用环境参数。
 5. 评估是否需要去重、采样、批量发送和失败重试。
 6. 补充隐私说明、数据保留周期和日志调试方式。

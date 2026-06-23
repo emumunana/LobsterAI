@@ -23,6 +23,8 @@ export const LogReporterAction = {
   AgentEngineSettingChanged: 'lobsterai_agent_engine_setting_changed',
   AppStarted: 'lobsterai_app_started',
   AppearanceSettingChanged: 'lobsterai_appearance_setting_changed',
+  CustomModelConnectionTested: 'lobsterai_custom_model_connection_tested',
+  CustomModelSettingsSaved: 'lobsterai_custom_model_settings_saved',
   ExpertKitSelected: 'lobsterai_expert_kit_selected',
   GeneralSettingChanged: 'lobsterai_general_setting_changed',
   McpEnabled: 'lobsterai_mcp_enabled',
