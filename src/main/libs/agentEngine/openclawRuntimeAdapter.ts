@@ -1009,6 +1009,22 @@ const isSameHistoryEntry = (
   right: { role: 'user' | 'assistant'; text: string },
 ): boolean => left.role === right.role && left.text === right.text;
 
+const normalizeAssistantSegmentForPrefixMatch = (value: string): string => {
+  return value.replace(/\s+/g, ' ').trim();
+};
+
+const isRedundantFinalPrefixSegment = (candidate: string, finalText: string): boolean => {
+  const normalizedCandidate = normalizeAssistantSegmentForPrefixMatch(candidate);
+  const normalizedFinal = normalizeAssistantSegmentForPrefixMatch(finalText);
+  if (normalizedCandidate.length < 80 || normalizedFinal.length <= normalizedCandidate.length) {
+    return false;
+  }
+  if (!normalizedFinal.startsWith(normalizedCandidate)) {
+    return false;
+  }
+  return normalizedCandidate.length / normalizedFinal.length >= 0.35;
+};
+
 const historyEntryKey = (entry: { role: 'user' | 'assistant'; text: string }): string => {
   return `${entry.role}\x1f${entry.text}`;
 };
@@ -5506,6 +5522,47 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     return null;
   }
 
+  private removeRedundantFinalPrefixSegment(
+    sessionId: string,
+    finalMessageId: string | null | undefined,
+    finalText: string,
+  ): void {
+    const normalizedFinalText = finalText.trim();
+    if (!normalizedFinalText) return;
+
+    const session = this.store.getSession(sessionId);
+    const messages = session?.messages ?? [];
+    const finalIndex = finalMessageId
+      ? messages.findIndex((message) => message.id === finalMessageId)
+      : messages.length;
+    const scanStart = finalIndex >= 0 ? finalIndex - 1 : messages.length - 1;
+
+    for (let i = scanStart; i >= 0; i -= 1) {
+      const message = messages[i];
+      if (message.type === 'user') {
+        return;
+      }
+      if (message.type !== 'assistant' || message.id === finalMessageId) {
+        continue;
+      }
+      if (message.metadata?.isThinking === true) {
+        continue;
+      }
+      if (!isRedundantFinalPrefixSegment(message.content, normalizedFinalText)) {
+        return;
+      }
+
+      console.debug(
+        '[OpenClawRuntime] removing redundant assistant prefix segment before final.',
+        `sessionId=${sessionId}`,
+        `messageId=${message.id}`,
+        `finalMessageId=${finalMessageId ?? 'pending'}`,
+      );
+      this.deleteAssistantMessage(sessionId, message.id);
+      return;
+    }
+  }
+
   private resolveAssistantMessageIdForUsage(sessionId: string, preferredMessageId?: string | null): string | undefined {
     const session = this.store.getSession(sessionId);
     if (!session) {
@@ -8074,6 +8131,10 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
 
       if (!canonicalSegmentText) {
         return;
+      }
+
+      if (!turn.planMode) {
+        this.removeRedundantFinalPrefixSegment(sessionId, turn.assistantMessageId, canonicalSegmentText);
       }
 
       if (!turn.assistantMessageId) {

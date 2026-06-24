@@ -1645,7 +1645,12 @@ function createReconcileStore(
           });
         }
       },
-      deleteMessage: () => true,
+      deleteMessage: (sessionId: string, messageId: string) => {
+        expect(sessionId).toBe(session.id);
+        const before = session.messages.length;
+        session.messages = session.messages.filter((message) => message.id !== messageId);
+        return session.messages.length < before;
+      },
     },
   };
 }
@@ -2645,6 +2650,73 @@ test('chat final repairs last segment with corrupted committed text from tool ca
 
     expect(session.messages.find((message) => message.id === 'msg-5')?.content).toBe(canonicalLastSegment);
     expect(session.messages.find((message) => message.id === 'msg-2')?.content).toBe(committedSegment);
+
+    await vi.advanceTimersByTimeAsync(800);
+    expect(session.status).toBe('completed');
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test('chat final removes redundant assistant prefix segment before final summary', async () => {
+  vi.useFakeTimers();
+  try {
+    const redundantPrefix = [
+      '邀请函页面已经做好了！',
+      '主要文件：',
+      '- leo-birthday-invitation/index.html',
+      '实现内容：',
+      '1. 深蓝星空背景和动态闪烁星星。',
+      '2. 手机优先响应式布局。',
+    ].join('\n');
+    const finalSummary = [
+      redundantPrefix,
+      '3. RSVP 两个按钮带温柔提示。',
+      '4. 已生成移动端预览图，方便验收。',
+    ].join('\n');
+    const { session, store } = createReconcileStore([
+      { id: 'msg-1', type: 'user', content: '确认执行计划', timestamp: 1, metadata: {} },
+      { id: 'msg-2', type: 'assistant', content: redundantPrefix, timestamp: 2, metadata: { isStreaming: false, isFinal: true } },
+      { id: 'msg-3', type: 'tool_use', content: 'write_file', timestamp: 3, metadata: {} },
+      { id: 'msg-4', type: 'tool_result', content: 'file created', timestamp: 4, metadata: {} },
+      { id: 'msg-5', type: 'assistant', content: redundantPrefix, timestamp: 5, metadata: { isStreaming: true, isFinal: false } },
+    ]);
+
+    const adapter = new OpenClawRuntimeAdapter(store, {});
+    const sessionKey = `agent:main:lobsterai:${session.id}`;
+    adapter.gatewayClient = {
+      start: () => {},
+      stop: () => {},
+      request: async () => ({
+        messages: [
+          { role: 'user', content: '确认执行计划' },
+          { role: 'assistant', content: finalSummary },
+        ],
+      }),
+    };
+
+    const turn = createActiveTurn(session.id, sessionKey, 'run-1');
+    turn.assistantMessageId = 'msg-5';
+    turn.committedAssistantText = redundantPrefix;
+    turn.currentAssistantSegmentText = redundantPrefix;
+    turn.currentText = finalSummary;
+    turn.currentContentText = finalSummary;
+    turn.currentContentBlocks = [finalSummary];
+    adapter.activeTurns.set(session.id, turn);
+    adapter.latestTurnTokenBySession.set(session.id, turn.turnToken);
+
+    adapter.handleChatEvent({
+      state: 'final',
+      runId: 'run-1',
+      sessionKey,
+      message: { role: 'assistant', content: finalSummary },
+    }, 1);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const updatedSession = store.getSession(session.id);
+    expect(updatedSession?.messages.some((message) => message.id === 'msg-2')).toBe(false);
+    expect(updatedSession?.messages.find((message) => message.id === 'msg-5')?.content).toBe(finalSummary);
 
     await vi.advanceTimersByTimeAsync(800);
     expect(session.status).toBe('completed');
