@@ -3,13 +3,28 @@ import { describe, expect, test } from 'vitest';
 import {
   dedupeArtifactsForDisplay,
   hasToolResultMediaAssets,
+  normalizeArtifactFilePath,
   normalizeFilePathForDedup,
   parseFileLinksFromMessage,
-  parseFilePathsFromText, parseLocalServiceUrlsFromText, parseMediaTokensFromText,
+  parseFilePathsFromText,
+  parseLocalServiceUrlsFromText,
+  parseMediaTokensFromText,
   parseToolArtifact,
   parseToolResultMediaArtifacts,
   shouldParseFilePathsFromToolResult,
 } from './artifactParser';
+
+describe('normalizeArtifactFilePath', () => {
+  test('strips MEDIA prefix from paths parsed as bare file paths', () => {
+    expect(normalizeArtifactFilePath('MEDIA:/Users/admin/work/test/test0623/generated-video.mp4'))
+      .toBe('/Users/admin/work/test/test0623/generated-video.mp4');
+  });
+
+  test('recovers absolute path from cwd-prefixed MEDIA artifacts', () => {
+    expect(normalizeArtifactFilePath('/users/admin/work/test/test0623/MEDIA:/Users/admin/work/test/test0623/generated-video.mp4'))
+      .toBe('/Users/admin/work/test/test0623/generated-video.mp4');
+  });
+});
 
 describe('normalizeFilePathForDedup', () => {
   test('strips leading / before Windows drive letter', () => {
@@ -450,6 +465,16 @@ describe('parseMediaTokensFromText', () => {
     const artifacts = parseMediaTokensFromText(content, 'msg1', 'sess1');
     expect(artifacts).toHaveLength(1);
     expect(artifacts[0].filePath).toBe('/tmp/output.png');
+  });
+});
+
+describe('parseFilePathsFromText', () => {
+  test('normalizes MEDIA-prefixed video paths captured by bare path detection', () => {
+    const content = 'MEDIA:/Users/admin/work/test/test0623/generated-video-20260623-184040-1.mp4';
+    const artifacts = parseFilePathsFromText(content, 'msg1', 'sess1');
+    expect(artifacts).toHaveLength(1);
+    expect(artifacts[0].filePath).toBe('/Users/admin/work/test/test0623/generated-video-20260623-184040-1.mp4');
+    expect(artifacts[0].type).toBe('video');
   });
 });
 
