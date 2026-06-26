@@ -83,10 +83,6 @@ vi.mock('./openclawTokenProxy', () => ({
   getOpenClawTokenProxyPort: () => mockRuntimeState.proxyPort,
 }));
 
-vi.mock('./openaiCodexAuth', () => ({
-  readOpenAICodexAuthFile: () => ({ accountId: 'acct-test' }),
-}));
-
 describe('OpenClawConfigSync runtime config output', () => {
   let tmpDir: string;
   let configPath: string;
@@ -362,7 +358,9 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(result.ok).toBe(true);
 
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    expect(config.models.providers['openai-codex']).toBeDefined();
+    expect(config.models.providers.openai).toBeDefined();
+    expect(config.models.providers.openai.api).toBe('openai-chatgpt-responses');
+    expect(config.models.providers['openai-codex']).toBeUndefined();
     expect(config.models.providers.deepseek).toBeDefined();
     expect(config.agents.defaults.models).toBeUndefined();
     expect(config.agents.defaults.workspace).toBe(path.join(stateDir, 'workspace-main'));
@@ -994,7 +992,7 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(config.tools.deny).not.toContain('video_generate');
   });
 
-  test('maps OpenAI OAuth mode to the OpenAI Codex provider', async () => {
+  test('maps OpenAI OAuth mode to the ChatGPT Responses provider', async () => {
     const { AuthType, OpenClawApi, OpenClawProviderId, ProviderName } = await import('../../shared/providers');
     const { buildProviderSelection } = await import('./openclawConfigSync');
 
@@ -1010,16 +1008,12 @@ describe('OpenClawConfigSync runtime config output', () => {
       modelName: 'GPT-5.4',
     });
 
-    expect(selection.providerId).toBe(OpenClawProviderId.OpenAICodex);
-    expect(selection.primaryModel).toBe(`${OpenClawProviderId.OpenAICodex}/gpt-5.4`);
+    expect(selection.providerId).toBe(OpenClawProviderId.OpenAI);
+    expect(selection.primaryModel).toBe(`${OpenClawProviderId.OpenAI}/gpt-5.4`);
     expect(selection.providerConfig.baseUrl).toBe('https://chatgpt.com/backend-api/codex');
-    expect(selection.providerConfig.api).toBe(OpenClawApi.OpenAICodexResponses);
+    expect(selection.providerConfig.api).toBe(OpenClawApi.OpenAIChatGPTResponses);
     expect(selection.providerConfig.auth).toBe(AuthType.OAuth);
-    expect(selection.providerConfig.headers).toEqual({
-      'chatgpt-account-id': 'acct-test',
-      originator: 'pi',
-      'OpenAI-Beta': 'responses=experimental',
-    });
+    expect(selection.providerConfig).not.toHaveProperty('headers');
     expect(selection.providerConfig).not.toHaveProperty('apiKey');
   });
 

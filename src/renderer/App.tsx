@@ -10,7 +10,7 @@ import {
   AppUpdateStatus,
   isManualDownloadUrl,
 } from '../shared/appUpdate/constants';
-import { OpenClawProviderId, ProviderName, ProviderRegistry } from '../shared/providers';
+import { ProviderName, ProviderRegistry } from '../shared/providers';
 import { CoworkView } from './components/cowork';
 import { CoworkShortcutDirection, CoworkUiEvent } from './components/cowork/constants';
 import CoworkPermissionModal from './components/cowork/CoworkPermissionModal';
@@ -51,11 +51,8 @@ import { CoworkCollaborationMode, type CoworkPermissionResult } from './types/co
 
 const getOpenClawProviderIdForConfig = (
   providerName: string,
-  providerConfig: { authType?: string },
+  _providerConfig: { authType?: string },
 ): string => {
-  if (providerName === ProviderName.OpenAI && providerConfig.authType === 'oauth') {
-    return OpenClawProviderId.OpenAICodex;
-  }
   return ProviderRegistry.getOpenClawProviderId(providerName);
 };
 

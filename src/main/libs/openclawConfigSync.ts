@@ -35,7 +35,6 @@ import {
   getCoworkOpenAICompatProxyBaseURL,
   getCoworkOpenAICompatProxyToken,
 } from './coworkOpenAICompatProxy';
-import { readOpenAICodexAuthFile } from './openaiCodexAuth';
 import {
   buildAgentEntry,
   buildManagedAgentEntries,
@@ -488,7 +487,7 @@ type OpenClawProviderApi =
   | 'anthropic-messages'
   | 'openai-completions'
   | 'openai-responses'
-  | 'openai-codex-responses'
+  | 'openai-chatgpt-responses'
   | 'google-generative-ai';
 
 type OpenClawProviderSelection = {
@@ -602,18 +601,6 @@ const shouldUseEnvProxyForProviderBaseUrl = (rawBaseUrl: string): boolean => (
   isSystemProxyEnabled() && !isLoopbackProviderBaseUrl(rawBaseUrl)
 );
 
-const buildOpenAICodexHeaders = (): Record<string, string> | undefined => {
-  const accountId = readOpenAICodexAuthFile()?.accountId;
-  if (!accountId) {
-    return undefined;
-  }
-  return {
-    'chatgpt-account-id': accountId,
-    originator: 'pi',
-    'OpenAI-Beta': 'responses=experimental',
-  };
-};
-
 const normalizeGeminiBaseUrl = (rawBaseUrl: string): string => {
   return normalizeBaseUrlPath(
     rawBaseUrl.trim() || 'https://generativelanguage.googleapis.com',
@@ -717,8 +704,8 @@ const PROVIDER_REGISTRY: Record<string, ProviderDescriptor> = {
   },
 
   [`${ProviderName.OpenAI}:oauth`]: {
-    providerId: OpenClawProviderId.OpenAICodex,
-    resolveApi: () => OpenClawApiConst.OpenAICodexResponses as OpenClawProviderApi,
+    providerId: OpenClawProviderId.OpenAI,
+    resolveApi: () => OpenClawApiConst.OpenAIChatGPTResponses as OpenClawProviderApi,
     normalizeBaseUrl: () => OPENAI_CODEX_BASE_URL,
     resolveApiKey: () => undefined,
   },
@@ -899,11 +886,6 @@ export const buildProviderSelection = (options: {
   const request = shouldUseEnvProxyForProviderBaseUrl(baseUrl)
     ? { proxy: { mode: 'env-proxy' as const } }
     : undefined;
-  const headers =
-    descriptor.providerId === OpenClawProviderId.OpenAICodex
-      ? buildOpenAICodexHeaders()
-      : undefined;
-
   return {
     providerId: descriptor.providerId,
     legacyModelId: options.modelId,
@@ -914,7 +896,6 @@ export const buildProviderSelection = (options: {
       api,
       ...(apiKey ? { apiKey } : {}),
       auth,
-      ...(headers ? { headers } : {}),
       ...(request ? { request } : {}),
       models: [
         {

@@ -2,7 +2,7 @@
  * Shared types, constants, and utility functions for model/provider settings.
  * Used by both Settings.tsx and ModelSettingsSection.tsx.
  */
-import { OpenClawProviderId, ProviderAuthType, ProviderName, ProviderRegistry } from '../../../shared/providers';
+import { ProviderAuthType, ProviderName, ProviderRegistry } from '../../../shared/providers';
 import { type AppConfig, defaultConfig } from '../../config';
 import { i18nService } from '../../services/i18n';
 
@@ -30,11 +30,8 @@ export const resolveModelSupportsImageForProvider = (
 
 export const getOpenClawProviderIdForConfig = (
   providerName: string,
-  providerConfig: ProviderConfig,
+  _providerConfig: ProviderConfig,
 ): string => {
-  if (providerName === ProviderName.OpenAI && providerConfig.authType === 'oauth') {
-    return OpenClawProviderId.OpenAICodex;
-  }
   return ProviderRegistry.getOpenClawProviderId(providerName);
 };
 

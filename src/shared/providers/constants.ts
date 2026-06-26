@@ -78,6 +78,7 @@ export const OpenClawApi = {
   OpenAICompletions: 'openai-completions',
   OpenAIResponses: 'openai-responses',
   OpenAICodexResponses: 'openai-codex-responses',
+  OpenAIChatGPTResponses: 'openai-chatgpt-responses',
   GoogleGenerativeAI: 'google-generative-ai',
 } as const;
 export type OpenClawApi = typeof OpenClawApi[keyof typeof OpenClawApi];

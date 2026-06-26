@@ -26,6 +26,7 @@ export type QualifiedAgentModelRefResolution =
 
 const LegacyQualifiedProviderMigration: Record<string, readonly string[]> = {
   [OpenClawProviderId.OpenAI]: [OpenClawProviderId.OpenAICodex],
+  [OpenClawProviderId.OpenAICodex]: [OpenClawProviderId.OpenAI],
 };
 
 export function parsePrimaryModelRef(primaryModel: string): ManagedSessionModelTarget | null {
