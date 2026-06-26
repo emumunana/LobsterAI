@@ -1465,6 +1465,12 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
       clearTimeout(skillSubmenuCloseTimerRef.current);
     }
     skillSubmenuCloseTimerRef.current = setTimeout(() => {
+      const activeElement = document.activeElement;
+      if (activeElement && addMenuRef.current?.contains(activeElement)) {
+        logPromptModelSelection('debug', 'kept skill submenu open because focus remains inside prompt tools menu');
+        skillSubmenuCloseTimerRef.current = null;
+        return;
+      }
       setShowSkillsPopover(false);
       skillSubmenuCloseTimerRef.current = null;
     }, 120);
