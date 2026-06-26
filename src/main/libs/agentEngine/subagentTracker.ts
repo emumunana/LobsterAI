@@ -315,6 +315,7 @@ export class SubagentTracker {
     sessionKey: string | null;
     status: 'running' | 'done' | 'error';
     createdAt: number;
+    endedAt: number | null;
   }> {
     const runs = this.store.listSubagentRuns(parentSessionId);
     return runs.map((run) => {
@@ -324,7 +325,8 @@ export class SubagentTracker {
       // Stale 'running' record from a previous session: no in-memory tracking means
       // it was never committed in this app lifecycle → mark as error and persist.
       if (run.status === 'running' && !memoryStatus && !this.pendingSpawnInfo.has(run.id)) {
-        this.store.updateSubagentRunStatus(run.id, 'error', Date.now());
+        const endedAt = Date.now();
+        this.store.updateSubagentRunStatus(run.id, 'error', endedAt);
         return {
           id: run.id,
           agentId: run.agentId,
@@ -333,6 +335,7 @@ export class SubagentTracker {
           sessionKey: memorySessionKey ?? run.sessionKey,
           status: 'error' as const,
           createdAt: run.createdAt,
+          endedAt,
         };
       }
 
@@ -344,6 +347,7 @@ export class SubagentTracker {
         sessionKey: memorySessionKey ?? run.sessionKey,
         status: memoryStatus ?? run.status,
         createdAt: run.createdAt,
+        endedAt: run.endedAt,
       };
     });
   }
@@ -448,6 +452,7 @@ export class SubagentTracker {
         label: pending.label,
         status,
         createdAt: pending.createdAt,
+        endedAt: isError ? Date.now() : null,
       });
       this.pendingSpawnInfo.delete(toolCallId);
       console.log('[SubagentTracker] committed spawn result:', toolCallId, status,

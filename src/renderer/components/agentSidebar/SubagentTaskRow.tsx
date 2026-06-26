@@ -16,8 +16,8 @@ interface SubagentTaskRowProps {
   onToggleSelection?: () => void;
 }
 
-const formatDuration = (createdAt: number): string => {
-  const elapsed = Date.now() - createdAt;
+const formatDuration = (createdAt: number, endedAt: number | null): string => {
+  const elapsed = Math.max(0, (endedAt ?? Date.now()) - createdAt);
   const seconds = Math.floor(elapsed / 1000);
   if (seconds < 60) return `${seconds}s`;
   const minutes = Math.floor(seconds / 60);
@@ -38,7 +38,10 @@ const SubagentTaskRow: React.FC<SubagentTaskRowProps> = ({
 }) => {
   const [showConfirmDelete, setShowConfirmDelete] = useState(false);
   const displayName = subagent.label ?? subagent.agentId ?? i18nService.t('subagentUnnamed');
-  const duration = formatDuration(subagent.createdAt);
+  const duration = formatDuration(
+    subagent.createdAt,
+    subagent.status === 'running' ? null : subagent.endedAt,
+  );
   const handleRowClick = () => {
     if (isBatchMode) {
       onToggleSelection?.();

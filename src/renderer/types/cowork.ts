@@ -315,6 +315,7 @@ export interface SubagentSessionSummary {
   parentSessionId: string;
   status: 'running' | 'done' | 'error';
   createdAt: number;
+  endedAt: number | null;
 }
 
 // Start session options

@@ -54,6 +54,7 @@ export const useSubagentSessions = (
         parentSessionId: sessionId,
         status: run.status,
         createdAt: run.createdAt,
+        endedAt: run.endedAt,
       }));
 
       setSubagentsBySessionId((prev) => {

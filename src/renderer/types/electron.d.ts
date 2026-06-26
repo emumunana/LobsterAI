@@ -756,6 +756,7 @@ interface IElectronAPI {
         sessionKey: string | null;
         status: 'running' | 'done' | 'error';
         createdAt: number;
+        endedAt: number | null;
       }>;
       error?: string;
     }>;
