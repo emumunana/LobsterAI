@@ -26,6 +26,7 @@ export type QualifiedAgentModelRefResolution =
 
 const LegacyQualifiedProviderMigration: Record<string, readonly string[]> = {
   [OpenClawProviderId.OpenAI]: [OpenClawProviderId.OpenAICodex],
+  [OpenClawProviderId.Minimax]: [OpenClawProviderId.MinimaxPortal],
   [OpenClawProviderId.OpenAICodex]: [OpenClawProviderId.OpenAI],
 };
 

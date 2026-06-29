@@ -17,6 +17,10 @@ import {
   CoworkSystemMessageKind,
 } from '../../../common/coworkSystemMessages';
 import { CoworkSelectedTextSource } from '../../../shared/cowork/selectedText';
+import {
+  __openClawTokenProxyTestUtils,
+  consumeRecentOpenClawTokenProxyQuotaError,
+} from '../openclawTokenProxy';
 import { ContinuityCapsuleSource } from './coworkContinuityCapsule';
 import {
   buildOpenClawChatSendPayloadTooLargeError,
@@ -29,6 +33,7 @@ import {
   OPENCLAW_CHAT_SEND_PAYLOAD_SAFE_LIMIT_BYTES,
   OpenClawRuntimeAdapter,
   pickPersistedAssistantSegment,
+  resolveOpenClawRuntimeErrorMessage,
   resolveToolEventIsError,
 } from './openclawRuntimeAdapter';
 
@@ -200,6 +205,80 @@ test('normalizeOpenClawRuntimeErrorMessage maps empty SSE parser errors', () => 
 
 test('normalizeOpenClawRuntimeErrorMessage keeps unrelated errors unchanged', () => {
   expect(normalizeOpenClawRuntimeErrorMessage('upstream 502')).toBe('upstream 502');
+});
+
+test('resolveOpenClawRuntimeErrorMessage restores recent quota error hidden by OpenClaw generic error', () => {
+  consumeRecentOpenClawTokenProxyQuotaError();
+  __openClawTokenProxyTestUtils.rememberQuotaError({
+    message: '本月积分已用完',
+    code: 40202,
+  });
+
+  expect(resolveOpenClawRuntimeErrorMessage('LLM request failed.')).toContain(
+    '积分额度已用完',
+  );
+  expect(consumeRecentOpenClawTokenProxyQuotaError()).toBeNull();
+});
+
+test('resolveOpenClawRuntimeErrorMessage classifies raw LobsterAI quota errors', () => {
+  expect(resolveOpenClawRuntimeErrorMessage('本月积分已用完')).toContain('积分额度已用完');
+});
+
+test('resolveOpenClawRuntimeErrorMessage classifies generic error from safe OAuth metadata', () => {
+  expect(resolveOpenClawRuntimeErrorMessage('LLM request failed.', {
+    provider: 'minimax-portal',
+    model: 'MiniMax-M3',
+    providerRuntimeFailureKind: 'auth_invalid_token',
+    rawErrorPreview: '401 Unauthorized',
+  })).toContain('OAuth 授权已失效');
+});
+
+test('resolveOpenClawRuntimeErrorMessage classifies generic error from safe model access metadata', () => {
+  expect(resolveOpenClawRuntimeErrorMessage('LLM request failed.', {
+    provider: 'minimax',
+    model: 'MiniMax-M2.7',
+    rawErrorPreview: '403 您无权访问MiniMax-M2.7。',
+  })).toContain('无权访问该模型');
+});
+
+test('resolveOpenClawRuntimeErrorMessage classifies generic error from safe timeout metadata', () => {
+  expect(resolveOpenClawRuntimeErrorMessage('LLM request failed.', {
+    provider: 'minimax',
+    model: 'MiniMax-M2.7',
+    providerRuntimeFailureKind: 'timeout',
+  })).toContain('网络连接失败');
+});
+
+test('resolveOpenClawRuntimeErrorMessage classifies generic error from safe fetch failure preview', () => {
+  expect(resolveOpenClawRuntimeErrorMessage('LLM request failed.', {
+    provider: 'minimax',
+    model: 'MiniMax-M2.7',
+    rawErrorPreview: 'TypeError: fetch failed; causeName=ConnectTimeoutError; causeCode=UND_ERR_CONNECT_TIMEOUT',
+  })).toContain('网络连接失败');
+});
+
+test('resolveOpenClawRuntimeErrorMessage prefers safe metadata over stale quota signal', () => {
+  consumeRecentOpenClawTokenProxyQuotaError();
+  __openClawTokenProxyTestUtils.rememberQuotaError({
+    message: '本月积分已用完',
+    code: 40202,
+  });
+
+  expect(resolveOpenClawRuntimeErrorMessage('LLM request failed.', {
+    provider: 'minimax',
+    model: 'MiniMax-M2.7',
+    providerRuntimeFailureKind: 'timeout',
+  })).toContain('网络连接失败');
+  expect(consumeRecentOpenClawTokenProxyQuotaError()).toBeNull();
+});
+
+test('resolveOpenClawRuntimeErrorMessage keeps generic error when safe metadata is unclassified', () => {
+  expect(resolveOpenClawRuntimeErrorMessage('LLM request failed.', {
+    provider: 'minimax',
+    model: 'MiniMax-M2.7',
+    providerRuntimeFailureKind: 'unclassified',
+    rawErrorPreview: 'provider returned a surprising response',
+  })).toBe('LLM request failed.');
 });
 
 test('estimateOpenClawChatSendFrameBytes measures the full RPC frame as UTF-8 JSON', () => {
@@ -2557,6 +2636,139 @@ test('chat error maps non-managed OpenClaw session key to existing local session
   ))).toBe(true);
 });
 
+test('chat error replaces generic LLM failure using safe OpenClaw metadata', () => {
+  const { session, store } = createReconcileStore([
+    { id: 'msg-1', type: 'user', content: 'hello', timestamp: 1, metadata: {} },
+  ]);
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  const sessionKey = `agent:main:lobsterai:${session.id}`;
+  const errorSpy = vi.fn();
+
+  session.status = 'running';
+  adapter.on('error', errorSpy);
+  adapter.activeTurns.set(session.id, createActiveTurn(session.id, sessionKey, 'run-minimax-oauth'));
+
+  adapter.handleChatEvent({
+    state: 'error',
+    runId: 'run-minimax-oauth',
+    sessionKey,
+    errorMessage: 'LLM request failed.',
+    provider: 'minimax-portal',
+    model: 'MiniMax-M3',
+    providerRuntimeFailureKind: 'auth_invalid_token',
+    rawErrorPreview: '401 Unauthorized',
+  }, 1);
+
+  const persistedError = session.messages.find((message) => message.type === 'system');
+  expect(session.status).toBe('error');
+  expect(errorSpy).toHaveBeenCalledWith(session.id, expect.stringContaining('OAuth 授权已失效'));
+  expect(persistedError?.content).toContain('OAuth 授权已失效');
+});
+
+test('chat error can consume quota signal after lifecycle error schedules fallback', () => {
+  vi.useFakeTimers();
+  try {
+    consumeRecentOpenClawTokenProxyQuotaError();
+    const { session, store } = createReconcileStore([
+      { id: 'msg-1', type: 'user', content: 'hello', timestamp: 1, metadata: {} },
+    ]);
+    const adapter = new OpenClawRuntimeAdapter(store, {});
+    const sessionKey = `agent:main:lobsterai:${session.id}`;
+    const errorSpy = vi.fn();
+    const abortRequest = vi.fn(async () => ({}));
+
+    session.status = 'running';
+    adapter.on('error', errorSpy);
+    adapter.gatewayClient = { start: () => {}, stop: () => {}, request: abortRequest };
+    adapter.activeTurns.set(session.id, createActiveTurn(session.id, sessionKey, 'run-quota'));
+    __openClawTokenProxyTestUtils.rememberQuotaError({
+      message: '本月积分已用完',
+      code: 40202,
+    });
+
+    adapter.handleAgentLifecycleEvent(session.id, {
+      phase: 'error',
+      error: 'LLM request failed.',
+    }, 'run-quota');
+
+    adapter.handleChatEvent({
+      state: 'error',
+      runId: 'run-quota',
+      sessionKey,
+      errorMessage: 'LLM request failed.',
+    }, 1);
+
+    const persistedError = session.messages.find((message) => message.type === 'system');
+    expect(session.status).toBe('error');
+    expect(errorSpy).toHaveBeenCalledWith(session.id, expect.stringContaining('积分额度已用完'));
+    expect(persistedError?.content).toContain('立即升级/充值');
+    expect(abortRequest).not.toHaveBeenCalled();
+    expect(consumeRecentOpenClawTokenProxyQuotaError()).toBeNull();
+  } finally {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+    consumeRecentOpenClawTokenProxyQuotaError();
+  }
+});
+
+test('chat final stopReason=error replaces generic LLM failure using safe OpenClaw metadata', async () => {
+  const { session, store } = createReconcileStore([
+    { id: 'msg-1', type: 'user', content: 'hello', timestamp: 1, metadata: {} },
+  ]);
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  const sessionKey = `agent:main:lobsterai:${session.id}`;
+  const errorSpy = vi.fn();
+
+  session.status = 'running';
+  adapter.on('error', errorSpy);
+  adapter.activeTurns.set(session.id, createActiveTurn(session.id, sessionKey, 'run-minimax-403'));
+
+  adapter.handleChatEvent({
+    state: 'final',
+    runId: 'run-minimax-403',
+    sessionKey,
+    stopReason: 'error',
+    errorMessage: 'LLM request failed.',
+    provider: 'minimax',
+    model: 'MiniMax-M2.7',
+    rawErrorPreview: '403 您无权访问MiniMax-M2.7。',
+  }, 1);
+  await Promise.resolve();
+
+  expect(session.status).toBe('error');
+  expect(errorSpy).toHaveBeenCalledWith(session.id, expect.stringContaining('无权访问该模型'));
+});
+
+test('chat final terminal error persists visible system message when no assistant content exists', async () => {
+  const { session, store } = createReconcileStore([
+    { id: 'msg-1', type: 'user', content: 'hello', timestamp: 1, metadata: {} },
+  ]);
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  const sessionKey = `agent:main:lobsterai:${session.id}`;
+  const errorSpy = vi.fn();
+
+  session.status = 'running';
+  adapter.on('error', errorSpy);
+  adapter.activeTurns.set(session.id, createActiveTurn(session.id, sessionKey, 'run-minimax-timeout'));
+
+  adapter.handleChatEvent({
+    state: 'final',
+    runId: 'run-minimax-timeout',
+    sessionKey,
+    stopReason: 'error',
+    errorMessage: 'LLM request failed.',
+    provider: 'minimax',
+    model: 'MiniMax-M2.7',
+    providerRuntimeFailureKind: 'timeout',
+  }, 1);
+  await Promise.resolve();
+
+  const persistedError = session.messages.find((message) => message.type === 'system');
+  expect(session.status).toBe('error');
+  expect(errorSpy).toHaveBeenCalledWith(session.id, expect.stringContaining('网络连接失败'));
+  expect(persistedError?.content).toContain('网络连接失败');
+});
+
 test('chat error ignores non-managed OpenClaw session key when local session id is unknown', () => {
   const localSessionId = '9d1af7fd-2827-42aa-a28d-8282c9b8df47';
   const unknownSessionId = '583d961c-4706-4742-ac60-20509f6698e5';
@@ -4791,6 +5003,53 @@ test('lifecycle error fallback waits before aborting a gateway run', async () =>
       runId: 'run-error',
     });
     expect(session.status).toBe('error');
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test('lifecycle error fallback replaces generic LLM failure using safe OpenClaw metadata', async () => {
+  vi.useFakeTimers();
+  try {
+    const { session, store } = createReconcileStore([
+      { id: 'msg-1', type: 'user', content: 'hello', timestamp: 1, metadata: {} },
+    ]);
+    const adapter = new OpenClawRuntimeAdapter(store, {});
+    const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+    const sessionKey = `agent:main:lobsterai:${session.id}`;
+    const errorSpy = vi.fn();
+    const turn = createActiveTurn(session.id, sessionKey, 'run-lifecycle-generic');
+
+    adapter.on('error', errorSpy);
+    adapter.gatewayClient = {
+      start: () => {},
+      stop: () => {},
+      request: async (method: string, params?: unknown) => {
+        requests.push({ method, params: params as Record<string, unknown> });
+        return {};
+      },
+    };
+    adapter.activeTurns.set(session.id, turn);
+
+    adapter.handleAgentLifecycleEvent(session.id, {
+      phase: 'error',
+      error: 'LLM request failed.',
+      provider: 'minimax-portal',
+      model: 'MiniMax-M3',
+      providerRuntimeFailureKind: 'auth_invalid_token',
+      rawErrorPreview: '401 Unauthorized',
+    }, 'run-lifecycle-generic');
+
+    await vi.advanceTimersByTimeAsync(20_000);
+
+    const persistedError = session.messages.find((message) => message.type === 'system');
+    expect(requests.find((request) => request.method === 'chat.abort')?.params).toMatchObject({
+      sessionKey,
+      runId: 'run-lifecycle-generic',
+    });
+    expect(session.status).toBe('error');
+    expect(errorSpy).toHaveBeenCalledWith(session.id, expect.stringContaining('OAuth 授权已失效'));
+    expect(persistedError?.content).toContain('OAuth 授权已失效');
   } finally {
     vi.useRealTimers();
   }

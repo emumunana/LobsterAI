@@ -60,6 +60,7 @@ export const OpenClawProviderId = {
   Zai: 'zai', // OpenClaw official provider ID for Zhipu/GLM
   Volcengine: 'volcengine',
   Minimax: 'minimax',
+  MinimaxPortal: 'minimax-portal',
   Youdaozhiyun: 'youdaozhiyun',
   StepFun: 'stepfun',
   Xiaomi: 'xiaomi',

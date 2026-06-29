@@ -390,6 +390,45 @@ export const getToolResultLineCountSummary = (lineCount: number): string => {
 export const getLargeToolResultSummary = (sizeLabel: string): string =>
   i18nService.t('coworkToolLargeOutput').replace('{size}', sizeLabel);
 
+const getGenericRunningStatusText = (): string => {
+  const text = i18nService.t('coworkToolRunning');
+  return text.endsWith('...') || text.endsWith('…') ? text : `${text}...`;
+};
+
+export const getStreamingActivityStatusText = (
+  messages: CoworkMessage[],
+  isContextMaintenance = false,
+): string => {
+  if (isContextMaintenance) {
+    return i18nService.t('coworkContextMaintenanceRunning');
+  }
+
+  const toolResultIds = new Set<string>();
+  for (const message of messages) {
+    const id = message.metadata?.toolUseId;
+    if (message.type === 'tool_result' && typeof id === 'string') {
+      toolResultIds.add(id);
+    }
+  }
+
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.type !== 'tool_use') continue;
+
+    const id = message.metadata?.toolUseId;
+    if (typeof id === 'string' && toolResultIds.has(id)) continue;
+
+    const toolName = typeof message.metadata?.toolName === 'string'
+      ? message.metadata.toolName.trim()
+      : '';
+    return toolName
+      ? `${i18nService.t('coworkToolRunning')} ${toolName}...`
+      : getGenericRunningStatusText();
+  }
+
+  return getGenericRunningStatusText();
+};
+
 export const getToolResultCollapsedDisplay = (message: CoworkMessage): ToolResultCollapsedDisplay => {
   const rawText = getToolResultRawText(message);
   if (!hasText(rawText)) {

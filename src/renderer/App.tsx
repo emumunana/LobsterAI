@@ -53,6 +53,9 @@ const getOpenClawProviderIdForConfig = (
   providerName: string,
   _providerConfig: { authType?: string },
 ): string => {
+  if (providerName === ProviderName.Minimax && providerConfig.authType === 'oauth') {
+    return OpenClawProviderId.MinimaxPortal;
+  }
   return ProviderRegistry.getOpenClawProviderId(providerName);
 };
 

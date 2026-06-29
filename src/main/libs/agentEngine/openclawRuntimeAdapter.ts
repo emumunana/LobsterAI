@@ -4,6 +4,7 @@ import { EventEmitter } from 'events';
 import * as fs from 'fs';
 import * as path from 'path';
 
+import { classifyErrorKey, CoworkErrorI18nKey } from '../../../common/coworkErrorClassify';
 import {
   ContextCompactionMode,
   ContextCompactionStatus,
@@ -59,6 +60,7 @@ import {
   stripTrailingSilentReplyToken,
 } from '../openclawHistory';
 import { buildOpenClawLocalTimeContextPrompt } from '../openclawLocalTimeContextPrompt';
+import { consumeRecentOpenClawTokenProxyQuotaError } from '../openclawTokenProxy';
 import {
   extractThinkingFromCurrentTurn,
   findMatchingThinkingMessageIdInCurrentTurn,
@@ -337,6 +339,13 @@ type ChatEventPayload = {
   message?: unknown;
   errorMessage?: string;
   stopReason?: string;
+  provider?: string;
+  model?: string;
+  failoverReason?: string;
+  providerRuntimeFailureKind?: string;
+  providerErrorType?: string;
+  rawErrorPreview?: string;
+  rawErrorHash?: string;
 };
 
 type AgentEventPayload = {
@@ -359,6 +368,7 @@ const OpenClawKnownRuntimeError = {
   UnexpectedEndOfJsonInput: 'Unexpected end of JSON input',
   OnlyEmptySseDataFrames: 'Provider stream emitted too many empty SSE data frames.',
 } as const;
+const OPENCLAW_GENERIC_LLM_REQUEST_FAILED = 'LLM request failed.';
 
 const OpenClawHistoryRole = {
   Tool: 'tool',
@@ -1005,6 +1015,136 @@ export function normalizeOpenClawRuntimeErrorMessage(errorMessage: string): stri
     default:
       return errorMessage;
   }
+}
+
+function isOpenClawGenericLlmRequestFailed(errorMessage: string): boolean {
+  return errorMessage.trim() === OPENCLAW_GENERIC_LLM_REQUEST_FAILED;
+}
+
+export type OpenClawSafeRuntimeErrorMetadata = {
+  error?: string;
+  errorMessage?: string;
+  provider?: string;
+  model?: string;
+  failoverReason?: string;
+  providerRuntimeFailureKind?: string;
+  providerErrorType?: string;
+  rawErrorPreview?: string;
+  rawErrorHash?: string;
+};
+
+const COWORK_ERROR_KEY_BY_OPENCLAW_FAILOVER_REASON: Record<string, string> = {
+  auth: CoworkErrorI18nKey.AuthInvalid,
+  billing: CoworkErrorI18nKey.InsufficientBalance,
+  rate_limit: CoworkErrorI18nKey.RateLimit,
+  overloaded: CoworkErrorI18nKey.RateLimit,
+  timeout: CoworkErrorI18nKey.NetworkError,
+  server_error: CoworkErrorI18nKey.ServerError,
+};
+
+const COWORK_ERROR_KEY_BY_OPENCLAW_RUNTIME_FAILURE_KIND: Record<string, string> = {
+  auth_scope: CoworkErrorI18nKey.ModelAccessDenied,
+  auth_refresh: CoworkErrorI18nKey.OAuthInvalid,
+  refresh_timeout: CoworkErrorI18nKey.OAuthInvalid,
+  refresh_contention: CoworkErrorI18nKey.OAuthInvalid,
+  callback_timeout: CoworkErrorI18nKey.OAuthInvalid,
+  callback_validation: CoworkErrorI18nKey.OAuthInvalid,
+  auth_html: CoworkErrorI18nKey.OAuthInvalid,
+  auth_invalid_token: CoworkErrorI18nKey.OAuthInvalid,
+  rate_limit: CoworkErrorI18nKey.RateLimit,
+  dns: CoworkErrorI18nKey.NetworkError,
+  timeout: CoworkErrorI18nKey.NetworkError,
+  upstream_html: CoworkErrorI18nKey.ServerError,
+  proxy: CoworkErrorI18nKey.NetworkError,
+  empty_response: CoworkErrorI18nKey.ServerError,
+};
+
+const pickStringField = (
+  record: Record<string, unknown>,
+  key: keyof OpenClawSafeRuntimeErrorMetadata,
+): string | undefined => {
+  const value = record[key];
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+};
+
+function normalizeOpenClawSafeRuntimeErrorMetadata(
+  metadata: unknown,
+): OpenClawSafeRuntimeErrorMetadata | undefined {
+  if (!isRecord(metadata)) return undefined;
+  const normalized: OpenClawSafeRuntimeErrorMetadata = {};
+  for (const key of [
+    'error',
+    'errorMessage',
+    'provider',
+    'model',
+    'failoverReason',
+    'providerRuntimeFailureKind',
+    'providerErrorType',
+    'rawErrorPreview',
+    'rawErrorHash',
+  ] as const) {
+    const value = pickStringField(metadata, key);
+    if (value) normalized[key] = value;
+  }
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function classifyOpenClawSafeRuntimeErrorMetadata(
+  metadata: OpenClawSafeRuntimeErrorMetadata | undefined,
+): string | null {
+  if (!metadata) return null;
+
+  const failureKind = metadata.providerRuntimeFailureKind?.trim();
+  if (failureKind && COWORK_ERROR_KEY_BY_OPENCLAW_RUNTIME_FAILURE_KIND[failureKind]) {
+    return COWORK_ERROR_KEY_BY_OPENCLAW_RUNTIME_FAILURE_KIND[failureKind];
+  }
+
+  const failoverReason = metadata.failoverReason?.trim();
+  if (failoverReason && COWORK_ERROR_KEY_BY_OPENCLAW_FAILOVER_REASON[failoverReason]) {
+    return COWORK_ERROR_KEY_BY_OPENCLAW_FAILOVER_REASON[failoverReason];
+  }
+
+  for (const candidate of [
+    metadata.rawErrorPreview,
+    metadata.errorMessage,
+    metadata.error,
+    metadata.providerErrorType,
+  ]) {
+    if (!candidate) continue;
+    const classifiedKey = classifyErrorKey(candidate);
+    if (classifiedKey) return classifiedKey;
+  }
+
+  return null;
+}
+
+export function resolveOpenClawRuntimeErrorMessage(
+  errorMessage: string,
+  metadata?: OpenClawSafeRuntimeErrorMetadata,
+): string {
+  const normalized = normalizeOpenClawRuntimeErrorMessage(errorMessage);
+  const classifiedKey = classifyErrorKey(normalized);
+
+  if (classifiedKey) {
+    if (classifiedKey === CoworkErrorI18nKey.QuotaExhausted) {
+      consumeRecentOpenClawTokenProxyQuotaError();
+    }
+    return t(classifiedKey);
+  }
+
+  if (isOpenClawGenericLlmRequestFailed(normalized)) {
+    const metadataClassifiedKey = classifyOpenClawSafeRuntimeErrorMetadata(metadata);
+    if (metadataClassifiedKey) {
+      consumeRecentOpenClawTokenProxyQuotaError();
+      return t(metadataClassifiedKey);
+    }
+    const recentQuotaError = consumeRecentOpenClawTokenProxyQuotaError();
+    if (recentQuotaError) {
+      return t(CoworkErrorI18nKey.QuotaExhausted);
+    }
+  }
+
+  return normalized;
 }
 
 const extractTextBlocksAndSignals = (
@@ -5469,7 +5609,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       // Wait for the gateway chat error or retry/compaction path to settle first;
       // if the turn is still active after that, surface the error ourselves.
       const rawErrorMessage = typeof data.error === 'string' ? data.error.trim() : 'OpenClaw run failed';
-      const errorMessage = normalizeOpenClawRuntimeErrorMessage(rawErrorMessage);
+      const errorMetadata = normalizeOpenClawSafeRuntimeErrorMetadata(data);
       const errorTurn = this.activeTurns.get(sessionId);
       const errorRunId = eventRunId
         ?? errorTurn?.runId
@@ -5479,6 +5619,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         if (!turn) return; // Already handled by handleChatError
         // If a different run started while the fallback was pending, leave it alone.
         if (errorRunId && !turn.knownRunIds.has(errorRunId)) return;
+        const errorMessage = resolveOpenClawRuntimeErrorMessage(rawErrorMessage, errorMetadata);
         console.log(`[OpenClawRuntime] lifecycle error fallback surfaced an error after waiting for the gateway chat error event in session ${sessionId}: ${errorMessage}`);
         // Abort the retrying run on the gateway so the session is freed for new messages.
         // Without this, the gateway continues retrying indefinitely and rejects subsequent chat.send requests.
@@ -6751,9 +6892,18 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     const stoppedByError = stopReason === GatewayStopReason.Error;
     if (stoppedByError) {
       const rawErrorMessage = payload.errorMessage?.trim() || errorMessageFromMessage?.trim() || 'OpenClaw run failed';
-      const errorMessage = normalizeOpenClawRuntimeErrorMessage(rawErrorMessage);
+      const errorMessage = resolveOpenClawRuntimeErrorMessage(
+        rawErrorMessage,
+        normalizeOpenClawSafeRuntimeErrorMetadata(payload),
+      );
       const erroredSessionKey = turn.sessionKey;
       this.store.updateSession(sessionId, { status: 'error' });
+      const errorMsg = this.store.addMessage(sessionId, {
+        type: 'system',
+        content: errorMessage,
+        metadata: { error: errorMessage },
+      });
+      this.emit('message', sessionId, errorMsg);
       this.emit('error', sessionId, errorMessage);
       this.cleanupSessionTurn(sessionId);
       this.rejectTurn(sessionId, new Error(errorMessage));
@@ -7364,7 +7514,10 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   private handleChatError(sessionId: string, turn: ActiveTurn, payload: ChatEventPayload): void {
     console.log('[OpenClawRuntime] handleChatError payload:', JSON.stringify(payload).slice(0, 1000));
     const rawErrorMessage = payload.errorMessage?.trim() || 'OpenClaw run failed';
-    let errorMessage = normalizeOpenClawRuntimeErrorMessage(rawErrorMessage);
+    let errorMessage = resolveOpenClawRuntimeErrorMessage(
+      rawErrorMessage,
+      normalizeOpenClawSafeRuntimeErrorMetadata(payload),
+    );
 
     // Detect model API errors that are likely caused by unsupported image content
     // in tool results (e.g., Read tool returning image blocks for non-vision models).

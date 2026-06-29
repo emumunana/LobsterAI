@@ -375,6 +375,18 @@ describe('resolveQualifiedAgentModelRef', () => {
     });
   });
 
+  test('rewrites MiniMax API refs to the portal provider when OAuth provider is configured', () => {
+    expect(resolveQualifiedAgentModelRef({
+      agentModel: 'minimax/MiniMax-M3',
+      availableProviders: {
+        'minimax-portal': { models: [{ id: 'MiniMax-M3' }] },
+      },
+    })).toEqual({
+      status: 'qualified',
+      primaryModel: 'minimax-portal/MiniMax-M3',
+    });
+  });
+
   test('keeps explicit server refs when a custom provider has the same model id', () => {
     expect(resolveQualifiedAgentModelRef({
       agentModel: 'lobsterai-server/kimi-k2.6',
