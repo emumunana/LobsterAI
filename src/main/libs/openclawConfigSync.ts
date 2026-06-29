@@ -35,7 +35,6 @@ import {
   getCoworkOpenAICompatProxyBaseURL,
   getCoworkOpenAICompatProxyToken,
 } from './coworkOpenAICompatProxy';
-import { readOpenAICodexAuthFile } from './openaiCodexAuth';
 import {
   buildAgentEntry,
   buildManagedAgentEntries,
@@ -47,6 +46,7 @@ import { parseChannelSessionKey } from './openclawChannelSessionSync';
 import { OpenClawConfigImpact } from './openclawConfigImpact';
 import type { OpenClawEngineManager } from './openclawEngineManager';
 import { getMainAgentWorkspacePath, readBootstrapFile } from './openclawMemoryFile';
+import { resolveOpenClawCatalogModelMaxTokens } from './openclawModelCatalog';
 
 const gwDiagTs = (): string => {
   const d = new Date();
@@ -89,6 +89,7 @@ const mapExecutionModeToSandboxMode = (
 export const OPENCLAW_AGENT_TIMEOUT_SECONDS = 3600;
 const DINGTALK_OPENCLAW_CHANNEL = 'dingtalk-connector';
 export const OPENCLAW_BINDING_ANY_ACCOUNT_ID = '*';
+const OPENCLAW_DEFAULT_MODEL_MAX_TOKENS = 8192;
 
 const OpenClawContextCacheProvider = {
   DashScope: 'dashscope',
@@ -488,7 +489,7 @@ type OpenClawProviderApi =
   | 'anthropic-messages'
   | 'openai-completions'
   | 'openai-responses'
-  | 'openai-codex-responses'
+  | 'openai-chatgpt-responses'
   | 'google-generative-ai';
 
 type OpenClawProviderSelection = {
@@ -602,18 +603,6 @@ const shouldUseEnvProxyForProviderBaseUrl = (rawBaseUrl: string): boolean => (
   isSystemProxyEnabled() && !isLoopbackProviderBaseUrl(rawBaseUrl)
 );
 
-const buildOpenAICodexHeaders = (): Record<string, string> | undefined => {
-  const accountId = readOpenAICodexAuthFile()?.accountId;
-  if (!accountId) {
-    return undefined;
-  }
-  return {
-    'chatgpt-account-id': accountId,
-    originator: 'pi',
-    'OpenAI-Beta': 'responses=experimental',
-  };
-};
-
 const normalizeGeminiBaseUrl = (rawBaseUrl: string): string => {
   return normalizeBaseUrlPath(
     rawBaseUrl.trim() || 'https://generativelanguage.googleapis.com',
@@ -667,6 +656,70 @@ const resolveDeepSeekModelReasoning = (modelId: string): boolean | undefined => 
   return undefined;
 };
 
+const isPositiveModelLimit = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isFinite(value) && value > 0;
+
+const clampModelMaxTokens = (rawMaxTokens: number | undefined, contextWindow: number | undefined): number | undefined => {
+  if (!isPositiveModelLimit(rawMaxTokens)) {
+    return undefined;
+  }
+  if (!isPositiveModelLimit(contextWindow)) {
+    return rawMaxTokens;
+  }
+  return Math.min(rawMaxTokens, contextWindow);
+};
+
+const resolveCatalogModelMaxTokens = (
+  providerId: string,
+  modelId: string,
+  sessionModelId: string,
+): number | undefined => {
+  const baseCandidateModelIds = [
+    modelId,
+    sessionModelId,
+    normalizeModelName(modelId),
+    normalizeModelName(sessionModelId),
+  ].filter(Boolean);
+  const candidateModelIds = Array.from(new Set([
+    ...baseCandidateModelIds,
+    ...baseCandidateModelIds
+      .filter(candidate => candidate.toLowerCase().startsWith('claude-'))
+      .map(candidate => candidate.replace(/\./g, '-')),
+  ]));
+
+  for (const candidateModelId of candidateModelIds) {
+    const maxTokens = resolveOpenClawCatalogModelMaxTokens(providerId, candidateModelId);
+    if (isPositiveModelLimit(maxTokens)) {
+      return maxTokens;
+    }
+  }
+  return undefined;
+};
+
+const resolveModelMaxTokensForOpenClaw = (options: {
+  api: OpenClawProviderApi;
+  modelId: string;
+  sessionModelId: string;
+  descriptor: ProviderDescriptor;
+  contextWindow?: number;
+}): number | undefined => {
+  const catalogMaxTokens = options.api === OpenClawApiConst.AnthropicMessages
+    ? resolveCatalogModelMaxTokens(
+      options.descriptor.providerId,
+      options.modelId,
+      options.sessionModelId,
+    )
+    : undefined;
+  const rawMaxTokens = catalogMaxTokens
+    ?? options.descriptor.modelDefaults?.maxTokens
+    ?? (
+      options.api === OpenClawApiConst.AnthropicMessages
+        ? OPENCLAW_DEFAULT_MODEL_MAX_TOKENS
+        : undefined
+    );
+  return clampModelMaxTokens(rawMaxTokens, options.contextWindow);
+};
+
 const PROVIDER_REGISTRY: Record<string, ProviderDescriptor> = {
   [ProviderName.LobsteraiServer]: {
     providerId: OpenClawProviderId.LobsteraiServer,
@@ -717,8 +770,8 @@ const PROVIDER_REGISTRY: Record<string, ProviderDescriptor> = {
   },
 
   [`${ProviderName.OpenAI}:oauth`]: {
-    providerId: OpenClawProviderId.OpenAICodex,
-    resolveApi: () => OpenClawApiConst.OpenAICodexResponses as OpenClawProviderApi,
+    providerId: OpenClawProviderId.OpenAI,
+    resolveApi: () => OpenClawApiConst.OpenAIChatGPTResponses as OpenClawProviderApi,
     normalizeBaseUrl: () => OPENAI_CODEX_BASE_URL,
     resolveApiKey: () => undefined,
   },
@@ -750,6 +803,11 @@ const PROVIDER_REGISTRY: Record<string, ProviderDescriptor> = {
 
   [ProviderName.Minimax]: {
     providerId: OpenClawProviderId.Minimax,
+    resolveApi: ({ apiType, baseURL }) => mapApiTypeToOpenClawApi(apiType, undefined, baseURL),
+    normalizeBaseUrl: stripChatCompletionsSuffix,
+  },
+  [`${ProviderName.Minimax}:oauth`]: {
+    providerId: OpenClawProviderId.MinimaxPortal,
     resolveApi: ({ apiType, baseURL }) => mapApiTypeToOpenClawApi(apiType, undefined, baseURL),
     normalizeBaseUrl: stripChatCompletionsSuffix,
   },
@@ -816,6 +874,9 @@ const resolveDescriptor = (
 ): ProviderDescriptor => {
   if (providerName === ProviderName.OpenAI && authType === 'oauth') {
     return PROVIDER_REGISTRY[`${ProviderName.OpenAI}:oauth`];
+  }
+  if (providerName === ProviderName.Minimax && authType === 'oauth') {
+    return PROVIDER_REGISTRY[`${ProviderName.Minimax}:oauth`];
   }
   if (codingPlanEnabled) {
     const compositeKey = `${providerName}:codingPlan`;
@@ -896,14 +957,16 @@ export const buildProviderSelection = (options: {
     options.modelId,
     options.contextWindow,
   ) ?? descriptor.modelDefaults?.contextWindow;
+  const modelMaxTokens = resolveModelMaxTokensForOpenClaw({
+    api,
+    modelId: options.modelId,
+    sessionModelId,
+    descriptor,
+    contextWindow,
+  });
   const request = shouldUseEnvProxyForProviderBaseUrl(baseUrl)
     ? { proxy: { mode: 'env-proxy' as const } }
     : undefined;
-  const headers =
-    descriptor.providerId === OpenClawProviderId.OpenAICodex
-      ? buildOpenAICodexHeaders()
-      : undefined;
-
   return {
     providerId: descriptor.providerId,
     legacyModelId: options.modelId,
@@ -914,7 +977,6 @@ export const buildProviderSelection = (options: {
       api,
       ...(apiKey ? { apiKey } : {}),
       auth,
-      ...(headers ? { headers } : {}),
       ...(request ? { request } : {}),
       models: [
         {
@@ -925,8 +987,8 @@ export const buildProviderSelection = (options: {
           ...(reasoning !== undefined ? { reasoning } : {}),
           ...(descriptor.modelDefaults?.cost ? { cost: descriptor.modelDefaults.cost } : {}),
           ...(contextWindow !== undefined ? { contextWindow } : {}),
-          ...(descriptor.modelDefaults?.maxTokens
-            ? { maxTokens: descriptor.modelDefaults.maxTokens }
+          ...(modelMaxTokens !== undefined
+            ? { maxTokens: modelMaxTokens }
             : {}),
         },
       ],

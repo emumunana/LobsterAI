@@ -83,10 +83,6 @@ vi.mock('./openclawTokenProxy', () => ({
   getOpenClawTokenProxyPort: () => mockRuntimeState.proxyPort,
 }));
 
-vi.mock('./openaiCodexAuth', () => ({
-  readOpenAICodexAuthFile: () => ({ accountId: 'acct-test' }),
-}));
-
 describe('OpenClawConfigSync runtime config output', () => {
   let tmpDir: string;
   let configPath: string;
@@ -362,7 +358,9 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(result.ok).toBe(true);
 
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    expect(config.models.providers['openai-codex']).toBeDefined();
+    expect(config.models.providers.openai).toBeDefined();
+    expect(config.models.providers.openai.api).toBe('openai-chatgpt-responses');
+    expect(config.models.providers['openai-codex']).toBeUndefined();
     expect(config.models.providers.deepseek).toBeDefined();
     expect(config.agents.defaults.models).toBeUndefined();
     expect(config.agents.defaults.workspace).toBe(path.join(stateDir, 'workspace-main'));
@@ -994,7 +992,7 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(config.tools.deny).not.toContain('video_generate');
   });
 
-  test('maps OpenAI OAuth mode to the OpenAI Codex provider', async () => {
+  test('maps OpenAI OAuth mode to the ChatGPT Responses provider', async () => {
     const { AuthType, OpenClawApi, OpenClawProviderId, ProviderName } = await import('../../shared/providers');
     const { buildProviderSelection } = await import('./openclawConfigSync');
 
@@ -1010,17 +1008,115 @@ describe('OpenClawConfigSync runtime config output', () => {
       modelName: 'GPT-5.4',
     });
 
-    expect(selection.providerId).toBe(OpenClawProviderId.OpenAICodex);
-    expect(selection.primaryModel).toBe(`${OpenClawProviderId.OpenAICodex}/gpt-5.4`);
+    expect(selection.providerId).toBe(OpenClawProviderId.OpenAI);
+    expect(selection.primaryModel).toBe(`${OpenClawProviderId.OpenAI}/gpt-5.4`);
     expect(selection.providerConfig.baseUrl).toBe('https://chatgpt.com/backend-api/codex');
-    expect(selection.providerConfig.api).toBe(OpenClawApi.OpenAICodexResponses);
+    expect(selection.providerConfig.api).toBe(OpenClawApi.OpenAIChatGPTResponses);
     expect(selection.providerConfig.auth).toBe(AuthType.OAuth);
-    expect(selection.providerConfig.headers).toEqual({
-      'chatgpt-account-id': 'acct-test',
-      originator: 'pi',
-      'OpenAI-Beta': 'responses=experimental',
-    });
+    expect(selection.providerConfig).not.toHaveProperty('headers');
     expect(selection.providerConfig).not.toHaveProperty('apiKey');
+  });
+
+  test('maps MiniMax OAuth mode to the MiniMax portal provider', async () => {
+    const { AuthType, OpenClawApi, OpenClawProviderId, ProviderName } = await import('../../shared/providers');
+    const { buildProviderSelection } = await import('./openclawConfigSync');
+
+    const selection = buildProviderSelection({
+      apiKey: 'oauth-token',
+      baseURL: 'https://api.minimaxi.com/anthropic',
+      modelId: 'MiniMax-M3',
+      apiType: 'anthropic',
+      providerName: ProviderName.Minimax,
+      authType: 'oauth',
+      codingPlanEnabled: false,
+      supportsImage: true,
+      supportsThinking: true,
+      modelName: 'MiniMax M3',
+    });
+
+    expect(selection.providerId).toBe(OpenClawProviderId.MinimaxPortal);
+    expect(selection.primaryModel).toBe(`${OpenClawProviderId.MinimaxPortal}/MiniMax-M3`);
+    expect(selection.providerConfig.api).toBe(OpenClawApi.AnthropicMessages);
+    expect(selection.providerConfig.auth).toBe(AuthType.OAuth);
+    expect(selection.providerConfig.apiKey).toBe('${LOBSTER_APIKEY_MINIMAX}');
+    expect(selection.providerConfig.models[0].maxTokens).toBe(131_072);
+  });
+
+  test('keeps MiniMax API key mode on the standard MiniMax provider', async () => {
+    const { AuthType, OpenClawApi, OpenClawProviderId, ProviderName } = await import('../../shared/providers');
+    const { buildProviderSelection } = await import('./openclawConfigSync');
+
+    const selection = buildProviderSelection({
+      apiKey: 'sk-minimax',
+      baseURL: 'https://api.minimaxi.com/anthropic',
+      modelId: 'MiniMax-M2.7',
+      apiType: 'anthropic',
+      providerName: ProviderName.Minimax,
+      authType: 'apikey',
+      codingPlanEnabled: false,
+      supportsImage: false,
+      modelName: 'MiniMax M2.7',
+    });
+
+    expect(selection.providerId).toBe(OpenClawProviderId.Minimax);
+    expect(selection.primaryModel).toBe(`${OpenClawProviderId.Minimax}/MiniMax-M2.7`);
+    expect(selection.providerConfig.api).toBe(OpenClawApi.AnthropicMessages);
+    expect(selection.providerConfig.auth).toBe(AuthType.ApiKey);
+    expect(selection.providerConfig.models[0].contextWindow).toBe(204_800);
+    expect(selection.providerConfig.models[0].maxTokens).toBe(131_072);
+  });
+
+  test('resolves OpenClaw catalog maxTokens by provider and model id', async () => {
+    const { resolveOpenClawCatalogModelMaxTokens } = await import('./openclawModelCatalog');
+
+    expect(resolveOpenClawCatalogModelMaxTokens('minimax', 'MiniMax-M3')).toBe(131_072);
+    expect(resolveOpenClawCatalogModelMaxTokens('minimax-portal', 'MiniMax-M3')).toBe(131_072);
+    expect(resolveOpenClawCatalogModelMaxTokens('anthropic', 'claude-sonnet-4-6')).toBe(64_000);
+    expect(resolveOpenClawCatalogModelMaxTokens('custom_0', 'MiniMax-M3')).toBeUndefined();
+  });
+
+  test('writes OpenClaw default maxTokens for unknown Anthropic-format custom providers', async () => {
+    const { OpenClawApi } = await import('../../shared/providers');
+    const { buildProviderSelection } = await import('./openclawConfigSync');
+
+    const selection = buildProviderSelection({
+      apiKey: 'sk-custom',
+      baseURL: 'https://api.example.com/anthropic',
+      modelId: 'custom-claude-compatible',
+      apiType: 'anthropic',
+      providerName: 'custom_0',
+      authType: 'apikey',
+      codingPlanEnabled: false,
+      supportsImage: false,
+      modelName: 'Custom Claude Compatible',
+      contextWindow: 1_000_000,
+    });
+
+    expect(selection.providerConfig.api).toBe(OpenClawApi.AnthropicMessages);
+    expect(selection.providerConfig.models[0].contextWindow).toBe(1_000_000);
+    expect(selection.providerConfig.models[0].maxTokens).toBe(8192);
+  });
+
+  test('does not use OpenClaw catalog maxTokens when custom provider id does not match', async () => {
+    const { OpenClawApi } = await import('../../shared/providers');
+    const { buildProviderSelection } = await import('./openclawConfigSync');
+
+    const selection = buildProviderSelection({
+      apiKey: 'sk-custom',
+      baseURL: 'https://api.example.com/anthropic',
+      modelId: 'MiniMax-M3',
+      apiType: 'anthropic',
+      providerName: 'custom_0',
+      authType: 'apikey',
+      codingPlanEnabled: false,
+      supportsImage: true,
+      supportsThinking: true,
+      modelName: 'MiniMax M3',
+    });
+
+    expect(selection.providerConfig.api).toBe(OpenClawApi.AnthropicMessages);
+    expect(selection.providerConfig.models[0].contextWindow).toBe(1_000_000);
+    expect(selection.providerConfig.models[0].maxTokens).toBe(8192);
   });
 
   test('repairs stale image capability for known Qwen models before writing OpenClaw input', async () => {

@@ -3,6 +3,7 @@ import { expect, test } from 'vitest';
 import type { CoworkMessage } from '../../types/cowork';
 import {
   formatStructuredText,
+  getStreamingActivityStatusText,
   getToolResultCollapsedDisplay,
   getToolResultDisplay,
   STRUCTURED_TEXT_FORMAT_MAX_CHARS,
@@ -47,4 +48,39 @@ test('collapsed tool result display summarizes large output without full formatt
   expect(collapsed.lineCount).toBe(0);
   expect(collapsed.text.length).toBeLessThan(largeOutput.length);
   expect(collapsed.text).toContain('first line');
+});
+
+test('streaming activity status shows generic running before assistant content', () => {
+  const messages: CoworkMessage[] = [{
+    id: 'user-1',
+    type: 'user',
+    content: 'hello',
+    timestamp: 1,
+  }];
+
+  expect(getStreamingActivityStatusText(messages)).toBe('执行中...');
+});
+
+test('streaming activity status keeps unresolved tool progress visible', () => {
+  const messages: CoworkMessage[] = [{
+    id: 'user-1',
+    type: 'user',
+    content: 'hello',
+    timestamp: 1,
+  }, {
+    id: 'tool-1',
+    type: 'tool_use',
+    content: '',
+    timestamp: 2,
+    metadata: {
+      toolUseId: 'tool-use-1',
+      toolName: 'exec_command',
+    },
+  }];
+
+  expect(getStreamingActivityStatusText(messages)).toBe('执行中 exec_command...');
+});
+
+test('streaming activity status shows context maintenance state', () => {
+  expect(getStreamingActivityStatusText([], true)).toBe('正在整理上下文...');
 });

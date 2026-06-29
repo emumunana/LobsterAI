@@ -88,6 +88,12 @@ describe('ProviderRegistry', () => {
     expect(OpenClawProviderId.Qwen).toBe('qwen');
   });
 
+  test('minimax exposes a distinct OpenClaw portal provider id for OAuth mode', () => {
+    expect(ProviderRegistry.getOpenClawProviderId(ProviderName.Minimax)).toBe(OpenClawProviderId.Minimax);
+    expect(OpenClawProviderId.Minimax).toBe('minimax');
+    expect(OpenClawProviderId.MinimaxPortal).toBe('minimax-portal');
+  });
+
   test('resolveModelSupportsThinking preserves known reasoning model metadata', () => {
     const knownReasoningModels: Array<[string, string]> = [
       [ProviderName.DeepSeek, 'deepseek-v4-pro'],

@@ -81,24 +81,60 @@ index 236122671c..c1259b93a7 100644
  
    if (
      !isFastTestEnv &&
-@@ -716,7 +718,7 @@ export async function getReplyFromConfig(
+@@ -716,7 +718,8 @@ export async function getReplyFromConfig(
          sessionKey,
          sessionId,
          storePath,
--        workspaceDir,
-+        workspaceDir: runCwd,
+         workspaceDir,
++        cwd: runCwd,
          abortedLastRun,
          autoFallbackPrimaryProbe,
        }),
-@@ -1014,7 +1016,7 @@ export async function getReplyFromConfig(
+@@ -1014,7 +1016,8 @@ export async function getReplyFromConfig(
        sessionKey,
        sessionId,
        storePath,
--      workspaceDir,
-+      workspaceDir: runCwd,
+       workspaceDir,
++      cwd: runCwd,
        abortedLastRun,
        autoFallbackPrimaryProbe: runAutoFallbackPrimaryProbe,
      }),
+diff --git a/src/auto-reply/reply/get-reply-run.ts b/src/auto-reply/reply/get-reply-run.ts
+--- a/src/auto-reply/reply/get-reply-run.ts
++++ b/src/auto-reply/reply/get-reply-run.ts
+@@ -437,6 +437,7 @@ type RunPreparedReplyParams = {
+   sessionId?: string;
+   storePath?: string;
+   workspaceDir: string;
++  cwd?: string;
+   abortedLastRun: boolean;
+   autoFallbackPrimaryProbe?: AutoFallbackPrimaryProbe;
+ };
+@@ -478,5 +479,6 @@ export async function runPreparedReply(
+     sessionId,
+     storePath,
+     workspaceDir,
++    cwd,
+     sessionStore,
+   } = params;
+@@ -1211,7 +1213,7 @@ export async function runPreparedReply(
+             ...(sessionStore ? { sessionStore } : {}),
+             ...(storePath ? { storePath } : {}),
+             agentId,
+-            cwd: workspaceDir,
++            cwd: cwd ?? workspaceDir,
+             config: cfg,
+           }),
+           errorContext: "reply user turn transcript",
+@@ -1268,7 +1270,7 @@ export async function runPreparedReply(
+       senderIsOwner: command.senderIsOwner,
+       traceAuthorized:
+         command.senderIsOwner || (ctx.GatewayClientScopes ?? []).includes("operator.admin"),
+       sessionFile: preparedSessionState.sessionFile,
+       workspaceDir,
+-      cwd: normalizeOptionalString(sessionEntry?.spawnedCwd),
++      cwd: normalizeOptionalString(sessionEntry?.spawnedCwd) ?? cwd,
+       config: cfg,
 diff --git a/src/auto-reply/get-reply-options.types.ts b/src/auto-reply/get-reply-options.types.ts
 --- a/src/auto-reply/get-reply-options.types.ts
 +++ b/src/auto-reply/get-reply-options.types.ts

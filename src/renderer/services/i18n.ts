@@ -549,6 +549,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkExpandedConversationPreviewCollapse: '收起会话预览',
     coworkExpandedConversationPreviewEmpty: '暂无会话内容',
     coworkExpandedConversationStatusRunning: '执行中',
+    coworkRailUnloadedMessageTitle: '未加载消息',
+    coworkRailUnloadedMessageHint: '点击加载该位置附近的消息',
     artifactBrowserBlankPage: '空白页',
     artifactBrowserShowDeviceToolbar: '显示设备工具栏',
     artifactBrowserHideDeviceToolbar: '隐藏设备工具栏',
@@ -1007,7 +1009,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkQuestionWizardSelectAtLeastOne: '请至少选择一个选项',
     coworkQuestionWizardAnswerRequired: '请选择或输入答案',
     coworkWelcome: 'LobsterAI',
-    coworkDescription: '7×24 小时帮你干活的全场景个人助理 Agent',
+    coworkDescription: '全场景办公助手 Agent',
     coworkCurrentAgent: '当前 Agent',
     coworkSelectAgent: '选择 Agent',
 
@@ -1302,8 +1304,12 @@ const translations: Record<LanguageType, Record<string, string>> = {
 
     // Cowork 错误消息
     coworkErrorAuthInvalid: 'API 密钥无效或已过期，请在设置中检查并更新您的 API 密钥。',
+    coworkErrorOAuthInvalid: 'OAuth 授权已失效或权限不足，请重新授权后重试。',
+    coworkErrorModelAccessDenied: '当前账号无权访问该模型，请切换模型或检查服务商账号权限。',
+    coworkErrorQuotaExhausted:
+      '积分额度已用完，请升级套餐后继续使用。[立即升级/充值](https://lobsterai.youdao.com/portal#/pricing)',
     coworkErrorFreeQuotaExhausted:
-      '当前模型的免费额度已用完，升级套餐后可继续使用。\n\n[立即升级](https://lobsterai.youdao.com/portal)',
+      '积分额度已用完，请升级套餐后继续使用。[立即升级/充值](https://lobsterai.youdao.com/portal#/pricing)',
     coworkErrorInsufficientBalance: 'API 余额不足，请充值后重试。',
     coworkErrorInputTooLong: '输入内容过长，超出模型上下文限制，请缩短对话内容后重试。',
     coworkErrorMessageTooLarge:
@@ -3103,6 +3109,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkExpandedConversationPreviewCollapse: 'Collapse conversation preview',
     coworkExpandedConversationPreviewEmpty: 'No conversation yet',
     coworkExpandedConversationStatusRunning: 'Running',
+    coworkRailUnloadedMessageTitle: 'Unloaded message',
+    coworkRailUnloadedMessageHint: 'Click to load messages around this position',
     artifactBrowserBlankPage: 'Blank page',
     artifactBrowserShowDeviceToolbar: 'Show device toolbar',
     artifactBrowserHideDeviceToolbar: 'Hide device toolbar',
@@ -3591,14 +3599,14 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkQuestionWizardSelectAtLeastOne: 'Please select at least one option',
     coworkQuestionWizardAnswerRequired: 'Please select or enter an answer',
     coworkWelcome: 'LobsterAI',
-    coworkDescription: 'A 24/7 personal assistant agent that gets work done for you',
+    coworkDescription: 'All-scenario office assistant Agent',
     coworkCurrentAgent: 'Current Agent',
     coworkSelectAgent: 'Select Agent',
 
     // Multi-Agent management
     createAgent: 'Create Agent',
     myAgents: 'My Agents',
-    defaultAgentDisplayName: 'Primary Agent',
+    defaultAgentDisplayName: 'Main Agent',
     myAgentSidebarPinned: 'Pinned',
     myAgentSidebarExpandMore: 'Show more',
     myAgentSidebarCollapse: 'Show less',
@@ -3895,8 +3903,14 @@ const translations: Record<LanguageType, Record<string, string>> = {
     // Cowork error messages
     coworkErrorAuthInvalid:
       'Invalid or expired API key. Please check and update your API key in settings.',
+    coworkErrorOAuthInvalid:
+      'OAuth authorization is invalid or missing required access. Re-authenticate and try again.',
+    coworkErrorModelAccessDenied:
+      'This account is not allowed to access the selected model. Switch models or check provider account permissions.',
+    coworkErrorQuotaExhausted:
+      'Your credits have been used up. Upgrade your plan to continue.\n\n[Upgrade or recharge](https://lobsterai.youdao.com/portal#/pricing)',
     coworkErrorFreeQuotaExhausted:
-      'The current model\'s free quota has been used up. Upgrade your plan to continue.\n\n[Upgrade now](https://lobsterai.youdao.com/portal)',
+      'Your credits have been used up. Upgrade your plan to continue.\n\n[Upgrade or recharge](https://lobsterai.youdao.com/portal#/pricing)',
     coworkErrorInsufficientBalance: 'Insufficient API balance. Please top up and try again.',
     coworkErrorInputTooLong:
       'Input too long, exceeding model context limit. Please shorten the conversation and try again.',
@@ -4334,7 +4348,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     connecting: 'Connecting',
     pendingSave: 'Pending save',
     imAgentBinding: 'Responding Agent',
-    imAgentBindingDefault: 'Default (Primary Agent)',
+    imAgentBindingDefault: 'Default (Main Agent)',
     imAgentBindingHint:
       'Select the Agent that responds to messages on this platform. Different Agents have different personas and skill configurations.',
     kickedByOtherClient: 'Account logged in elsewhere',
@@ -4830,7 +4844,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     scheduledTasksFormDescription: 'Description',
     scheduledTasksFormDescriptionPlaceholder: 'Optional task description',
     scheduledTasksFormAgentId: 'Agent ID',
-    scheduledTasksFormAgentIdPlaceholder: 'Optional, leave blank to use Primary Agent',
+    scheduledTasksFormAgentIdPlaceholder: 'Optional, leave blank to use Main Agent',
     scheduledTasksFormScheduleType: 'Plan',
     scheduledTasksFormScheduleModeEvery: 'Every',
     scheduledTasksFormScheduleModeAt: 'At',

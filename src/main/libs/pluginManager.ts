@@ -878,6 +878,7 @@ const INTERNAL_PLUGIN_IDS = [
   'deepseek',
   'moonshot',
   'minimax',
+  'minimax-portal',
   'volcengine',
   'qianfan',
   'qwen',

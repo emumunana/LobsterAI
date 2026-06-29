@@ -112,6 +112,28 @@ const strongPatchValidators = {
       ],
     },
   ],
+  'openclaw-user-turn-cache-stability.patch': [
+    {
+      file: 'src/agents/embedded-agent-runner/run/attempt.llm-boundary.ts',
+      snippets: [
+        'canonicalizeTextOnlyUserContent',
+        'stampUserTextWithMessageTimestamp',
+        'currentUserTimestampOverride',
+      ],
+    },
+    {
+      file: 'src/gateway/server-methods/agent-timestamp.ts',
+      snippets: ['export function buildTimestampPrefix'],
+    },
+    {
+      file: 'src/gateway/server-methods/chat.ts',
+      snippets: ['BodyForAgent: messageForAgent'],
+    },
+    {
+      file: 'src/agents/embedded-agent-runner/run/attempt.llm-boundary.cache-stability.test.ts',
+      snippets: ['prompt-cache byte-identity', 'turn1AsCurrent', 'turn1AsHistorical'],
+    },
+  ],
 };
 
 function collectMissingStrongPatchSnippets(patchFile) {
