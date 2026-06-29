@@ -129,8 +129,25 @@ const EXPANDED_CONVERSATION_PREVIEW_COLLAPSED_MAX_LENGTH = 140;
 const EXPANDED_CONVERSATION_PREVIEW_ITEM_MAX_LENGTH = 520;
 const EXPANDED_CONVERSATION_PREVIEW_ITEM_LIMIT = 8;
 const RAIL_LONG_JUMP_VIEWPORT_MULTIPLIER = 2.5;
-const RAIL_LINE_MIN_WIDTH = 6;
-const RAIL_LINE_MAX_WIDTH = 16;
+const RAIL_LINE_DEFAULT_WIDTH = 8;
+const RAIL_LINE_ACTIVE_WIDTH = 28;
+const RAIL_LINE_HOVER_STEPS = [28, 18, 13, 10] as const;
+const RAIL_LINE_HEIGHT = 3;
+
+const getRailLineWidth = (
+  index: number,
+  activeIndex: number,
+  hoveredIndex: number | null,
+): number => {
+  if (hoveredIndex !== null) {
+    const hoverDistance = Math.abs(index - hoveredIndex);
+    if (hoverDistance < RAIL_LINE_HOVER_STEPS.length) {
+      return RAIL_LINE_HOVER_STEPS[hoverDistance];
+    }
+  }
+
+  return index === activeIndex ? RAIL_LINE_ACTIVE_WIDTH : RAIL_LINE_DEFAULT_WIDTH;
+};
 
 interface LatestProposedPlan {
   messageId: string;
@@ -3103,10 +3120,6 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       messageRailIndex,
     ],
   );
-  const railMaxContentLength = useMemo(
-    () => railItems.reduce((acc, item) => Math.max(acc, item.contentLen), 1),
-    [railItems],
-  );
   const railTooltipItem = railTooltip ? railItems[railTooltip.railIndex] : undefined;
   const railTooltipTitle = railTooltipItem
     ? railTooltipItem.isPlaceholder
@@ -3777,9 +3790,8 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
             >
               {railItems.map((msg, idx) => {
                 const isActive = idx === resolvedRailIndex;
-                const isHovered = idx === hoveredRailIndex;
-                const ratio = msg.contentLen / railMaxContentLength;
-                const lineW = Math.round(RAIL_LINE_MIN_WIDTH + ratio * (RAIL_LINE_MAX_WIDTH - RAIL_LINE_MIN_WIDTH));
+                const isHighlighted = hoveredRailIndex === null ? isActive : idx === hoveredRailIndex;
+                const lineWidth = getRailLineWidth(idx, resolvedRailIndex, hoveredRailIndex);
                 return (
                   <button
                     key={msg.key}
@@ -3800,13 +3812,17 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
                     onMouseLeave={() => setRailTooltip(null)}
                     className="flex items-center justify-end cursor-pointer w-5 py-[5px]"
                   >
-                    <div
-                      className={`h-[2px] rounded-full transition-all ${
-                        isActive || isHovered
-                          ? 'bg-neutral-800 dark:bg-neutral-200'
-                          : 'bg-neutral-300 dark:bg-neutral-600'
+                    <span
+                      className={`block shrink-0 border-solid transition-[width,border-color] ${
+                        isHighlighted
+                          ? 'border-neutral-800 dark:border-neutral-200'
+                          : 'border-neutral-300 dark:border-neutral-600'
                       }`}
-                      style={{ width: isActive || isHovered ? RAIL_LINE_MAX_WIDTH : lineW }}
+                      style={{
+                        width: lineWidth,
+                        height: 0,
+                        borderTopWidth: RAIL_LINE_HEIGHT,
+                      }}
                     />
                   </button>
                 );

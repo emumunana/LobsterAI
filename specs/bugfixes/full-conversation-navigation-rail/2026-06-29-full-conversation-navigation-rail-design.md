@@ -279,6 +279,14 @@ tooltip 展示需要类似 IDE/Codex 小地图预览：
 - 底部显示来源标识，例如 `LobsterAI`，用于说明该 tooltip 来自当前 Cowork 会话。
 - rail index 尚未返回时允许短暂显示“未加载消息”兜底；rail index 成功后所有 item 都应展示真实摘要。
 
+轨道短线样式需要与 Codex 小地图一致：
+
+- 默认状态下所有轨道短线使用统一短宽度，不再根据消息长度绘制长短。
+- 当前 active item 使用更深颜色和最长宽度。
+- 鼠标 hover 某个 item 时，以 hover item 为中心，向上下邻近若干条逐步缩短，形成阶梯视觉。
+- hover 阶梯只影响视觉宽度和颜色，不改变 rail item 数据、tooltip 数据、点击定位或懒加载逻辑。
+- 轨道整体保持内容高度自适应，仅受最大高度限制；item 过多时中间轨道列表内部滚动，箭头不被撑到上下两端。
+
 分组只发生在 renderer 侧，不改变主进程轻量索引接口。主进程仍返回单条消息级别的轻量 preview，以避免一次性传输完整历史正文。
 
 ### 4.7 点击未加载 rail item 时加载目标窗口
@@ -384,13 +392,15 @@ setMessageWindow({
 8. 轨道视觉 item 按一问一答合并展示；140 条交替 user/assistant 消息应展示约 70 个轨道 item。
 9. tooltip 应显示该轮用户问题摘要和助手回答摘要，而不是只显示单条消息或占位 `Message N`。
 10. 合并后的 rail item 点击仍能加载并定位到该轮起始消息，不受 tool/system 消息夹杂影响。
-11. 目标实现后，相关 TypeScript 文件通过 changed-file ESLint：
+11. 轨道默认短线宽度统一；hover 时邻近 item 呈现从中心向外递减的阶梯宽度。
+12. 轨道高度保持内容自适应，仅超出最大高度时滚动；上下箭头应靠近轨道内容。
+13. 目标实现后，相关 TypeScript 文件通过 changed-file ESLint：
 
 ```bash
 npx eslint --ext ts,tsx --report-unused-disable-directives --max-warnings 0 <touched files>
 ```
 
-12. 相关分页和 Redux 行为需要补 Vitest 覆盖，至少包括：
+14. 相关分页和 Redux 行为需要补 Vitest 覆盖，至少包括：
    - rail index action 写入和缓存
    - `setMessageWindow` 替换窗口
    - `prependMessages` 与窗口替换后的 offset 行为
