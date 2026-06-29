@@ -37,6 +37,7 @@ import { setCoworkProxySessionId } from '../coworkOpenAICompatProxy';
 import { extractOpenClawAssistantStreamParts,extractOpenClawAssistantStreamText } from '../openclawAssistantText';
 import {
   buildManagedSessionKey,
+  isCronSessionKey,
   isManagedSessionKey,
   type OpenClawChannelSessionSync,
   parseManagedSessionKey,
@@ -76,6 +77,21 @@ import {
 import { buildCoworkTopKEvidenceBridgeResult } from './coworkTopKEvidence';
 import { buildCoworkWorkspaceRehydrationBridge } from './coworkWorkspaceRehydration';
 import { OpenClawApprovalController } from './openclawApprovalController';
+import {
+  applyLocalTimestampsToEntries,
+  buildGatewayMediaMetadata,
+  findTailAlignment,
+  getLocalMediaAttachmentsKey,
+  isSameReconciledEntry,
+  type ReconciledConversationEntry,
+} from './openclawConversationReconciliation';
+import {
+  buildCronRunHistoryEntries,
+  buildCronRunLocalHistoryEntries,
+  findCronRunHistoryLocalMatch,
+  hasCronRunHistoryForSession,
+  shouldReplaceLocalConversationWithCronHistory,
+} from './openclawCronRunHistorySync';
 import { SubagentTracker } from './subagentTracker';
 import type {
   CoworkContextUsage,
@@ -193,55 +209,6 @@ function validateRuntimeImageAttachments(
   }
   return { ok: true };
 }
-
-const normalizeLocalMediaPathKey = (value: unknown): string => {
-  if (typeof value !== 'string') return '';
-  return value.trim().replace(/\\/g, '/').toLowerCase();
-};
-
-const getLocalMediaAttachmentsKey = (metadata: unknown): string => {
-  if (!isRecord(metadata) || !Array.isArray(metadata.localMediaAttachments)) {
-    return '';
-  }
-  return metadata.localMediaAttachments
-    .map((item) => {
-      if (!isRecord(item)) return '';
-      const localPath = normalizeLocalMediaPathKey(item.localPath);
-      if (!localPath) return '';
-      const mimeType = typeof item.mimeType === 'string' ? item.mimeType.trim().toLowerCase() : '';
-      return `${localPath}\x1e${mimeType}`;
-    })
-    .filter(Boolean)
-    .sort()
-    .join('\x1f');
-};
-
-const buildGatewayMediaMetadata = (
-  entry: { mediaAttachments?: Array<{ localPath: string; mimeType?: string }> },
-): Record<string, unknown> | undefined => {
-  const attachments = entry.mediaAttachments
-    ?.map((attachment) => {
-      const localPath = attachment.localPath.trim();
-      if (!localPath) return null;
-      const mimeType = attachment.mimeType?.trim();
-      return {
-        localPath,
-        ...(mimeType ? { mimeType } : {}),
-        name: path.basename(localPath),
-      };
-    })
-    .filter((attachment): attachment is { localPath: string; mimeType?: string; name: string } => attachment !== null);
-
-  return attachments?.length ? { localMediaAttachments: attachments } : undefined;
-};
-
-const isSameReconciledEntry = (
-  left: { role: 'user' | 'assistant'; text: string; metadata?: Record<string, unknown> },
-  right: { role: 'user' | 'assistant'; text: string; metadata?: Record<string, unknown> },
-): boolean => {
-  return isSameHistoryEntry(left, right)
-    && getLocalMediaAttachmentsKey(left.metadata) === getLocalMediaAttachmentsKey(right.metadata);
-};
 
 /** How we chose assistant text to persist at chat.final (for tests and logs). */
 export type PersistedSegmentPickReason =
@@ -820,13 +787,6 @@ type ChannelHistorySyncEntry = {
   metadata?: Record<string, unknown>;
 };
 
-type ReconciledConversationEntry = {
-  role: 'user' | 'assistant';
-  text: string;
-  metadata?: Record<string, unknown>;
-  timestamp?: number;
-};
-
 const isRecord = (value: unknown): value is Record<string, unknown> => {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 };
@@ -992,134 +952,6 @@ const normalizeEntryText = (
   if (flags.isPopo && role === 'user') result = stripPopoSystemHeader(result);
   if (flags.isFeishu && role === 'user') result = stripFeishuSystemHeader(result);
   return result;
-};
-
-const isSameHistoryEntry = (
-  left: { role: 'user' | 'assistant'; text: string },
-  right: { role: 'user' | 'assistant'; text: string },
-): boolean => left.role === right.role && left.text === right.text;
-
-const historyEntryKey = (entry: { role: 'user' | 'assistant'; text: string }): string => {
-  return `${entry.role}\x1f${entry.text}`;
-};
-
-const isValidMessageTimestamp = (value: unknown): value is number => {
-  return typeof value === 'number' && Number.isFinite(value) && value > 0;
-};
-
-const applyLocalTimestampsToEntries = (
-  entries: ReconciledConversationEntry[],
-  localEntries: Array<{ role: 'user' | 'assistant'; text: string; timestamp?: number }>,
-): ReconciledConversationEntry[] => {
-  const localTimestamps = new Map<string, number[]>();
-  for (const entry of localEntries) {
-    if (!isValidMessageTimestamp(entry.timestamp)) continue;
-    const key = historyEntryKey(entry);
-    const timestamps = localTimestamps.get(key) ?? [];
-    timestamps.push(entry.timestamp);
-    localTimestamps.set(key, timestamps);
-  }
-
-  return entries.map((entry) => {
-    if (isValidMessageTimestamp(entry.timestamp)) {
-      return entry;
-    }
-    const timestamps = localTimestamps.get(historyEntryKey(entry));
-    const timestamp = timestamps?.shift();
-    return timestamp != null ? { ...entry, timestamp } : entry;
-  });
-};
-
-/**
- * Find the tail-alignment point between local and authoritative entries.
- *
- * `chat.history` can return a bounded tail window that starts in the middle of
- * a turn, often with an assistant entry before the first user anchor. Prefer a
- * full role/text overlap first; then fall back to user-message anchors and
- * report both the local and authoritative start indices so leading orphan
- * assistant entries are not duplicated into the local prefix on every poll.
- */
-const findTailAlignment = (
-  localEntries: ReadonlyArray<{ role: 'user' | 'assistant'; text: string }>,
-  authEntries: ReadonlyArray<{ role: 'user' | 'assistant'; text: string }>,
-): { localIdx: number; authIdx: number } | null => {
-  if (authEntries.length === 0) return null;
-  if (localEntries.length === 0) return { localIdx: 0, authIdx: 0 };
-
-  const maxEntryOverlap = Math.min(localEntries.length, authEntries.length);
-  for (let overlap = maxEntryOverlap; overlap >= 1; overlap -= 1) {
-    const localStart = localEntries.length - overlap;
-    let match = true;
-    for (let idx = 0; idx < overlap; idx += 1) {
-      if (!isSameHistoryEntry(localEntries[localStart + idx], authEntries[idx])) {
-        match = false;
-        break;
-      }
-    }
-    if (match) {
-      return { localIdx: localStart, authIdx: 0 };
-    }
-  }
-
-  // Extract user-only entries with their original indices
-  const localUsers: Array<{ idx: number; text: string }> = [];
-  for (let i = 0; i < localEntries.length; i++) {
-    if (localEntries[i].role === 'user') {
-      localUsers.push({ idx: i, text: localEntries[i].text });
-    }
-  }
-
-  const authUsers: Array<{ idx: number; text: string }> = [];
-  for (let i = 0; i < authEntries.length; i++) {
-    const entry = authEntries[i];
-    if (entry.role === 'user') {
-      authUsers.push({ idx: i, text: entry.text });
-    }
-  }
-
-  if (authUsers.length === 0 || localUsers.length === 0) {
-    // No user messages to anchor on — fall back to full replace
-    return { localIdx: 0, authIdx: 0 };
-  }
-
-  // Find largest k where localUsers tail-k texts == authUsers head-k texts
-  const maxK = Math.min(localUsers.length, authUsers.length);
-  for (let k = maxK; k >= 1; k--) {
-    const localStart = localUsers.length - k;
-    let match = true;
-    for (let j = 0; j < k; j++) {
-      if (localUsers[localStart + j].text !== authUsers[j].text) {
-        match = false;
-        break;
-      }
-    }
-    if (match) {
-      // The alignment point is the original index of the first overlapping
-      // user message in local and authoritative history.
-      const localIdx = localUsers[localStart].idx;
-      const authIdx = authUsers[0].idx;
-      if (authIdx > 0) {
-        const leadingLocalIdx = localIdx - authIdx;
-        const leadingAuthAlreadyPresent = leadingLocalIdx >= 0
-          && authEntries.slice(0, authIdx).every((entry, idx) =>
-            isSameHistoryEntry(localEntries[leadingLocalIdx + idx], entry),
-          );
-        if (!leadingAuthAlreadyPresent) {
-          return {
-            localIdx: Math.max(0, leadingLocalIdx),
-            authIdx: 0,
-          };
-        }
-      }
-      return {
-        localIdx,
-        authIdx,
-      };
-    }
-  }
-
-  // No overlap found
-  return null;
 };
 
 const extractMessageText = extractGatewayMessageText;
@@ -5671,7 +5503,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         this.emit('error', sessionId, errorMessage);
         this.cleanupSessionTurn(sessionId);
         this.rejectTurn(sessionId, new Error(errorMessage));
-        void this.reconcileWithHistory(sessionId, erroredSessionKey);
+        void this.syncSessionHistoryFromGateway(sessionId, erroredSessionKey);
       }, OpenClawRuntimeAdapter.LIFECYCLE_ERROR_FALLBACK_DELAY_MS);
     }
   }
@@ -5881,7 +5713,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       if (isManagedSessionKey(turn.sessionKey)) {
         await this.syncFinalAssistantWithHistory(sessionId, turn);
       } else {
-        await this.reconcileWithHistory(sessionId, turn.sessionKey);
+        await this.syncSessionHistoryFromGateway(sessionId, turn.sessionKey);
       }
     } catch (error) {
       console.warn('[OpenClawRuntime] fallback final sync failed:', error);
@@ -6776,7 +6608,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         });
         return;
       }
-      await this.reconcileWithHistory(sessionId, turn.sessionKey);
+      await this.syncSessionHistoryFromGateway(sessionId, turn.sessionKey);
       this.store.updateSession(sessionId, { status: 'completed' });
       this.emit('complete', sessionId, payload.runId ?? turn.runId);
       this.cleanupSessionTurn(sessionId);
@@ -6926,7 +6758,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       this.cleanupSessionTurn(sessionId);
       this.rejectTurn(sessionId, new Error(errorMessage));
       // Reconcile even on error so the UI shows messages already delivered.
-      void this.reconcileWithHistory(sessionId, erroredSessionKey);
+      void this.syncSessionHistoryFromGateway(sessionId, erroredSessionKey);
       return;
     }
 
@@ -6938,7 +6770,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       await this.syncFinalAssistantWithHistory(sessionId, turn);
     } else {
       // Awaited so that IM handlers reading from the store see reconciled data.
-      await this.reconcileWithHistory(sessionId, turn.sessionKey);
+      await this.syncSessionHistoryFromGateway(sessionId, turn.sessionKey);
     }
 
     const reconciledPlanText = turn.currentAssistantSegmentText.trim()
@@ -7359,7 +7191,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     const abortedSessionKey = turn.sessionKey;
     this.cleanupSessionTurn(sessionId);
     this.resolveTurn(sessionId);
-    void this.reconcileWithHistory(sessionId, abortedSessionKey);
+    void this.syncSessionHistoryFromGateway(sessionId, abortedSessionKey);
   }
 
   /**
@@ -7554,7 +7386,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     this.emit('error', sessionId, errorMessage);
     this.cleanupSessionTurn(sessionId);
     this.rejectTurn(sessionId, new Error(errorMessage));
-    void this.reconcileWithHistory(sessionId, erroredSessionKey);
+    void this.syncSessionHistoryFromGateway(sessionId, erroredSessionKey);
   }
 
   private resolveApprovalSessionId(sessionKey: string): string | undefined {
@@ -7681,6 +7513,118 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       return;
     }
     this.gatewayHistoryCountBySession.set(sessionId, historyMessages.length);
+  }
+
+  private async syncSessionHistoryFromGateway(
+    sessionId: string,
+    sessionKey: string,
+    options?: { isFullSync?: boolean },
+  ): Promise<void> {
+    if (isCronSessionKey(sessionKey)) {
+      await this.syncCronRunHistory(sessionId, sessionKey, options);
+      return;
+    }
+
+    await this.reconcileWithHistory(sessionId, sessionKey, options);
+  }
+
+  /**
+   * Cron run sessions are not a stable full-conversation source of truth:
+   * each run-scoped sessionKey only describes one execution, while the local
+   * Cowork session can later contain user follow-up turns under a managed key.
+   * Sync cron history non-destructively so missed run output can be backfilled
+   * without deleting follow-up messages from the local conversation.
+   */
+  private async syncCronRunHistory(
+    sessionId: string,
+    sessionKey: string,
+    _options?: { isFullSync?: boolean },
+  ): Promise<void> {
+    const client = this.gatewayClient;
+    if (!client) {
+      console.log('[CronHistorySync] no gateway client, skipping - sessionId:', sessionId);
+      return;
+    }
+
+    try {
+      const history = await client.request<{ messages?: unknown[] }>('chat.history', {
+        sessionKey,
+        limit: FINAL_HISTORY_SYNC_LIMIT,
+      }, { timeoutMs: 10_000 });
+      if (!Array.isArray(history?.messages) || history.messages.length === 0) {
+        console.log('[CronHistorySync] empty history - sessionId:', sessionId);
+        this.channelSyncCursor.set(sessionId, 0);
+        return;
+      }
+
+      const previousHistoryCountKnown = this.gatewayHistoryCountBySession.has(sessionId);
+      const previousHistoryCount = this.gatewayHistoryCountBySession.get(sessionId) ?? 0;
+      this.gatewayHistoryCountBySession.set(sessionId, history.messages.length);
+      this.syncSystemMessagesFromHistory(sessionId, history.messages, {
+        previousCountKnown: previousHistoryCountKnown,
+        previousCount: previousHistoryCount,
+      });
+
+      const authoritativeEntries = buildCronRunHistoryEntries(history.messages, sessionKey);
+      if (authoritativeEntries.length === 0) {
+        console.log('[CronHistorySync] no user/assistant entries in history - sessionId:', sessionId);
+        this.channelSyncCursor.set(sessionId, 0);
+        return;
+      }
+
+      const session = this.store.getSession(sessionId);
+      if (!session) return;
+
+      if (hasCronRunHistoryForSession(session.messages, sessionKey)) {
+        this.channelSyncCursor.set(sessionId, authoritativeEntries.length);
+        return;
+      }
+
+      const localEntries = buildCronRunLocalHistoryEntries(session.messages);
+      if (shouldReplaceLocalConversationWithCronHistory(localEntries, authoritativeEntries, sessionKey)) {
+        this.store.replaceConversationMessages(
+          sessionId,
+          applyLocalTimestampsToEntries(authoritativeEntries, localEntries),
+        );
+        this.channelSyncCursor.set(sessionId, authoritativeEntries.length);
+        return;
+      }
+
+      const usedLocalMessageIds = new Set<string>();
+      for (const authoritative of authoritativeEntries) {
+        const matchingLocal = findCronRunHistoryLocalMatch(
+          authoritative,
+          localEntries,
+          usedLocalMessageIds,
+          sessionKey,
+        );
+
+        if (matchingLocal) {
+          usedLocalMessageIds.add(matchingLocal.id);
+          this.store.updateMessage(sessionId, matchingLocal.id, {
+            metadata: {
+              ...(matchingLocal.metadata ?? {}),
+              ...(authoritative.metadata ?? {}),
+            },
+          });
+          continue;
+        }
+
+        this.store.addMessage(sessionId, {
+          type: authoritative.role,
+          content: authoritative.text,
+          metadata: {
+            isStreaming: false,
+            isFinal: true,
+            ...(authoritative.metadata ?? {}),
+          },
+        });
+      }
+
+      this.channelSyncCursor.set(sessionId, authoritativeEntries.length);
+    } catch (error) {
+      console.warn('[CronHistorySync] failed - sessionId:', sessionId, 'error:', error);
+    }
   }
 
   /**
@@ -8431,7 +8375,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     this.fullySyncedSessions.add(sessionId);
 
     try {
-      await this.reconcileWithHistory(sessionId, sessionKey, { isFullSync: true });
+      await this.syncSessionHistoryFromGateway(sessionId, sessionKey, { isFullSync: true });
     } catch (error) {
       console.error('[ChannelSync] syncFullChannelHistory: error:', error);
       // Remove from synced set so retry is possible
@@ -8449,7 +8393,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       return;
     }
 
-    await this.reconcileWithHistory(sessionId, sessionKey);
+    await this.syncSessionHistoryFromGateway(sessionId, sessionKey);
   }
 
   /**
@@ -8461,7 +8405,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     if (!this.channelSessionSync.isChannelSessionKey(sessionKey)) return;
     if (!this.fullySyncedSessions.has(sessionId)) return;
 
-    void this.reconcileWithHistory(sessionId, sessionKey).catch((err) => {
+    void this.syncSessionHistoryFromGateway(sessionId, sessionKey).catch((err) => {
       console.warn('[ChannelSync] post-turn incremental sync failed for', sessionKey, err);
     });
   }
@@ -8787,7 +8731,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         if (this.reCreatedChannelSessionIds.has(sessionId)) {
           await this.syncLatestChannelUserMessage(sessionId, sessionKey);
         } else {
-          await this.reconcileWithHistory(sessionId, sessionKey);
+          await this.syncSessionHistoryFromGateway(sessionId, sessionKey);
         }
         const afterCount = this.getUserMessageCount(sessionId);
         const newUserMessages = afterCount - beforeCount;

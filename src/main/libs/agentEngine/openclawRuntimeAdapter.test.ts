@@ -1694,7 +1694,7 @@ function createReconcileStore(
             id: `msg-${nextId++}`,
             type: entry.role,
             content: entry.text,
-            metadata: { isStreaming: false, isFinal: true },
+            metadata: { isStreaming: false, isFinal: true, ...(entry.metadata ?? {}) },
             timestamp: typeof entry.timestamp === 'number' ? entry.timestamp : nextId,
           });
         }
@@ -5284,6 +5284,118 @@ test('syncFullChannelHistory seeds gateway history cursor so old reminders are n
   });
 
   expect(getSystemMessages(session).length).toBe(0);
+});
+
+test('syncFullChannelHistory: cron run history backfills initial run without losing old behavior', async () => {
+  const cronKey = 'agent:main:cron:drink-water:run:run-1';
+  const { session, store, getReplaceCallCount } = createReconcileStore([
+    { id: 'msg-1', type: 'assistant', content: '喝水时间到', timestamp: 1, metadata: { isStreaming: false, isFinal: true } },
+  ]);
+
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  adapter.gatewayClient = {
+    start: () => {},
+    stop: () => {},
+    request: async () => ({
+      messages: [
+        { role: 'user', content: '提醒我喝水' },
+        { role: 'assistant', content: '喝水时间到' },
+      ],
+    }),
+  };
+
+  await adapter.syncFullChannelHistory(session.id, cronKey);
+
+  expect(getReplaceCallCount()).toBe(1);
+  expect(session.messages.filter((message) => message.type === 'user' || message.type === 'assistant').map((message) => ({
+    type: message.type,
+    content: message.content,
+  }))).toEqual([
+    { type: 'user', content: '提醒我喝水' },
+    { type: 'assistant', content: '喝水时间到' },
+  ]);
+});
+
+test('syncFullChannelHistory: cron run history does not replace follow-up messages', async () => {
+  const cronKey = 'agent:main:cron:drink-water:run:run-1';
+  const { session, store, getReplaceCallCount } = createReconcileStore([
+    { id: 'msg-1', type: 'assistant', content: '喝水时间到', timestamp: 1, metadata: { isStreaming: false, isFinal: true } },
+    { id: 'msg-2', type: 'user', content: '改成几点？', timestamp: 2, metadata: {} },
+    { id: 'msg-3', type: 'assistant', content: '已改为每天 10:00。', timestamp: 3, metadata: { isStreaming: false, isFinal: true } },
+  ]);
+
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  adapter.gatewayClient = {
+    start: () => {},
+    stop: () => {},
+    request: async () => ({
+      messages: [
+        { role: 'user', content: '提醒我喝水' },
+        { role: 'assistant', content: '喝水时间到' },
+      ],
+    }),
+  };
+
+  await adapter.syncFullChannelHistory(session.id, cronKey);
+
+  expect(getReplaceCallCount()).toBe(0);
+  const conversation = session.messages
+    .filter((message) => message.type === 'user' || message.type === 'assistant')
+    .map((message) => `${message.type}:${message.content}`);
+  expect(conversation).toContain('user:改成几点？');
+  expect(conversation).toContain('assistant:已改为每天 10:00。');
+  expect(conversation.filter((entry) => entry === 'assistant:喝水时间到')).toHaveLength(1);
+  expect(conversation).toContain('user:提醒我喝水');
+});
+
+test('syncFullChannelHistory: cron run history appends a later run without replacing prior runs', async () => {
+  const oldCronKey = 'agent:main:cron:drink-water:run:run-1';
+  const newCronKey = 'agent:main:cron:drink-water:run:run-2';
+  const { session, store, getReplaceCallCount } = createReconcileStore([
+    {
+      id: 'msg-1',
+      type: 'user',
+      content: '提醒我喝水',
+      timestamp: 1,
+      metadata: { openclawCronRunSessionKey: oldCronKey, openclawCronRunEntryIndex: 0 },
+    },
+    {
+      id: 'msg-2',
+      type: 'assistant',
+      content: '第一次喝水提醒',
+      timestamp: 2,
+      metadata: { isStreaming: false, isFinal: true, openclawCronRunSessionKey: oldCronKey, openclawCronRunEntryIndex: 1 },
+    },
+    { id: 'msg-3', type: 'user', content: '改成 10 点', timestamp: 3, metadata: {} },
+    { id: 'msg-4', type: 'assistant', content: '已改为每天 10:00。', timestamp: 4, metadata: { isStreaming: false, isFinal: true } },
+  ]);
+
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  adapter.gatewayClient = {
+    start: () => {},
+    stop: () => {},
+    request: async () => ({
+      messages: [
+        { role: 'user', content: '提醒我喝水' },
+        { role: 'assistant', content: '第二次喝水提醒' },
+      ],
+    }),
+  };
+
+  await adapter.syncFullChannelHistory(session.id, newCronKey);
+
+  expect(getReplaceCallCount()).toBe(0);
+  const conversation = session.messages
+    .filter((message) => message.type === 'user' || message.type === 'assistant')
+    .map((message) => `${message.type}:${message.content}`);
+  expect(conversation).toEqual([
+    'user:提醒我喝水',
+    'assistant:第一次喝水提醒',
+    'user:改成 10 点',
+    'assistant:已改为每天 10:00。',
+    'user:提醒我喝水',
+    'assistant:第二次喝水提醒',
+  ]);
 });
 
 test('prefetchChannelUserMessages also consumes existing reminder history backlog', async () => {
