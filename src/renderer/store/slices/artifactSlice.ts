@@ -24,6 +24,7 @@ export type ArtifactContentView = typeof ArtifactContentView[keyof typeof Artifa
 export const ArtifactSpecialTab = {
   FileList: 'fileList',
   Browser: 'browser',
+  Subagents: 'subagents',
 } as const;
 export type ArtifactSpecialTab = typeof ArtifactSpecialTab[keyof typeof ArtifactSpecialTab];
 
@@ -284,6 +285,11 @@ const artifactSlice = createSlice({
       setPanelOpen(state, action.payload.sessionId, true);
     },
 
+    activateArtifactSubagentTab(state, action: PayloadAction<{ sessionId: string }>) {
+      activatePreviewTab(state, action.payload.sessionId, null);
+      setPanelOpen(state, action.payload.sessionId, true);
+    },
+
     closeArtifactPreviewTab(state, action: PayloadAction<{ sessionId: string; tabId: string }>) {
       const { sessionId, tabId } = action.payload;
       const tabs = state.previewTabsBySession[sessionId] ?? [];
@@ -349,6 +355,7 @@ export const {
   selectArtifact,
   openArtifactPreviewTab,
   activateArtifactBrowserTab,
+  activateArtifactSubagentTab,
   activateArtifactPreviewTab,
   activateArtifactFileListTab,
   closeArtifactPreviewTab,
