@@ -99,6 +99,39 @@ test('plan mode rejects a preface and accepts a structured implementation plan',
   expect(isPlanModeResponseComplete(completePlan)).toBe(true);
 });
 
+test('plan mode treats OpenClaw failure finals as system errors instead of proposed plans', async () => {
+  const { session, store } = createReconcileStore([
+    { id: 'msg-1', type: 'user', content: 'plan a web game', timestamp: 1, metadata: {} },
+  ]);
+  session.status = 'running';
+  const adapter = new OpenClawRuntimeAdapter(store, {});
+  adapter.on('error', vi.fn());
+  const sessionKey = `agent:main:lobsterai:${session.id}`;
+  const turn = createActiveTurn(session.id, sessionKey, 'run-lock-final');
+  turn.planMode = true;
+  adapter.activeTurns.set(session.id, turn);
+
+  await adapter.handleChatFinal(session.id, turn, {
+    state: 'final',
+    runId: 'run-lock-final',
+    sessionKey,
+    message: {
+      role: 'assistant',
+      content: [{
+        type: 'text',
+        text: '⚠️ Agent failed before reply: session file locked (timeout 60000ms): pid=47378 alive=true',
+      }],
+    },
+  });
+
+  expect(session.status).toBe('error');
+  expect(session.messages.some((message) => message.type === 'assistant')).toBe(false);
+  const systemMessage = session.messages.find((message) => message.type === 'system');
+  expect(systemMessage?.content).toContain('session file locked');
+  expect(systemMessage?.content).not.toContain('<proposed_plan>');
+  expect(adapter.activeTurns.has(session.id)).toBe(false);
+});
+
 test('assistant snapshot jitter does not count as a stream reset', () => {
   expect(isSignificantAssistantStreamReset(545, 544)).toBe(false);
   expect(isSignificantAssistantStreamReset(1000, 930)).toBe(false);
@@ -4804,93 +4837,109 @@ test('ordinary write tool does not trigger memory maintenance handling', async (
   expect(session.messages.find((message) => message.type === 'tool_use')?.metadata?.toolName).toBe('write');
 });
 
-test('blocked plan mode mutation aborts the unsafe run and resumes with a tool-free plan request', async () => {
-  const preface = 'Now let me read the workspace to understand the project structure.';
-  const { session, store } = createReconcileStore([
-    { id: 'msg-1', type: 'user', content: 'plan a bakery website', timestamp: 1, metadata: {} },
-    {
-      id: 'msg-2',
-      type: 'assistant',
-      content: preface,
-      timestamp: 2,
-      metadata: { isStreaming: true, isFinal: false },
-    },
-  ]);
-  session.status = 'running';
-  const adapter = new OpenClawRuntimeAdapter(store, {});
-  const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
-  const sessionKey = `agent:main:lobsterai:${session.id}`;
-  const turn = createActiveTurn(session.id, sessionKey, 'run-plan-unsafe');
-  turn.planMode = true;
-  turn.assistantMessageId = 'msg-2';
-  turn.currentText = preface;
-  turn.currentAssistantSegmentText = preface;
-  turn.agentAssistantTextLength = preface.length;
+test('blocked plan mode mutation waits for lifecycle end before safety recovery', async () => {
+  vi.useFakeTimers();
+  try {
+    const preface = 'Now let me read the workspace to understand the project structure.';
+    const { session, store } = createReconcileStore([
+      { id: 'msg-1', type: 'user', content: 'plan a bakery website', timestamp: 1, metadata: {} },
+      {
+        id: 'msg-2',
+        type: 'assistant',
+        content: preface,
+        timestamp: 2,
+        metadata: { isStreaming: true, isFinal: false },
+      },
+    ]);
+    session.status = 'running';
+    const adapter = new OpenClawRuntimeAdapter(store, {});
+    const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+    const sessionKey = `agent:main:lobsterai:${session.id}`;
+    const turn = createActiveTurn(session.id, sessionKey, 'run-plan-unsafe');
+    turn.planMode = true;
+    turn.assistantMessageId = 'msg-2';
+    turn.currentText = preface;
+    turn.currentAssistantSegmentText = preface;
+    turn.agentAssistantTextLength = preface.length;
 
-  adapter.gatewayClient = {
-    start: () => {},
-    stop: () => {},
-    request: async (method: string, params?: unknown) => {
-      requests.push({ method, params: params as Record<string, unknown> });
-      return method === 'chat.send' ? { runId: 'run-plan-safe-recovery' } : {};
-    },
-  };
-  adapter.activeTurns.set(session.id, turn);
-  adapter.sessionIdByRunId.set('run-plan-unsafe', session.id);
+    adapter.gatewayClient = {
+      start: () => {},
+      stop: () => {},
+      request: async (method: string, params?: unknown) => {
+        requests.push({ method, params: params as Record<string, unknown> });
+        return method === 'chat.send' ? { runId: 'run-plan-safe-recovery' } : {};
+      },
+    };
+    adapter.activeTurns.set(session.id, turn);
+    adapter.sessionIdByRunId.set('run-plan-unsafe', session.id);
 
-  adapter.handleAgentEvent({
-    runId: 'run-plan-unsafe',
-    sessionKey,
-    stream: 'tool',
-    data: {
-      toolCallId: 'call-mkdir',
-      phase: 'start',
-      name: 'exec',
-      args: { command: 'mkdir -p /tmp/mcbakery' },
-    },
-  }, 1);
-  await Promise.resolve();
+    adapter.handleAgentEvent({
+      runId: 'run-plan-unsafe',
+      sessionKey,
+      stream: 'tool',
+      data: {
+        toolCallId: 'call-mkdir',
+        phase: 'start',
+        name: 'exec',
+        args: { command: 'mkdir -p /tmp/mcbakery' },
+      },
+    }, 1);
+    await Promise.resolve();
 
-  expect(requests.find((request) => request.method === 'chat.abort')?.params).toEqual({
-    sessionKey,
-    runId: 'run-plan-unsafe',
-  });
-  expect(turn.planModeSafetyRecoveryPending).toBe(true);
-  expect(turn.planModeRecoveryAttempted).toBe(true);
-  expect(session.status).toBe('running');
-  expect(session.messages.some((message) => message.type === 'system')).toBe(false);
+    expect(requests.find((request) => request.method === 'chat.abort')?.params).toEqual({
+      sessionKey,
+      runId: 'run-plan-unsafe',
+    });
+    expect(turn.planModeSafetyRecoveryPending).toBe(true);
+    expect(turn.planModeRecoveryAttempted).toBe(true);
+    expect(session.status).toBe('running');
+    expect(session.messages.some((message) => message.type === 'system')).toBe(false);
 
-  adapter.handleChatEvent({
-    state: 'aborted',
-    runId: 'run-plan-unsafe',
-    sessionKey,
-    stopReason: 'abort',
-  }, 2);
-  await Promise.resolve();
-  await Promise.resolve();
+    adapter.handleChatEvent({
+      state: 'aborted',
+      runId: 'run-plan-unsafe',
+      sessionKey,
+      stopReason: 'abort',
+    }, 2);
+    await Promise.resolve();
 
-  const recoveryRequest = requests.find((request) => request.method === 'chat.send');
-  expect(recoveryRequest?.params).toMatchObject({
-    sessionKey,
-    deliver: false,
-    message: expect.stringContaining('Plan Mode safety recovery instruction'),
-  });
-  expect(recoveryRequest?.params.message).toContain('Do not call any tools');
-  expect(turn.planModeSafetyRecoveryPending).toBe(false);
-  expect(turn.knownRunIds.has('run-plan-safe-recovery')).toBe(true);
-  expect(session.status).toBe('running');
-  expect(session.messages.some((message) => message.metadata?.isTimeout)).toBe(false);
+    expect(requests.some((request) => request.method === 'chat.send')).toBe(false);
 
-  const recoveredPlan = '<proposed_plan>\n## Summary\n- Build the bakery page.\n</proposed_plan>';
-  adapter.processAgentAssistantText({
-    runId: 'run-plan-safe-recovery',
-    sessionKey,
-    stream: 'assistant',
-    data: { text: recoveredPlan },
-  });
+    adapter.handleAgentEvent({
+      runId: 'run-plan-unsafe',
+      sessionKey,
+      stream: 'lifecycle',
+      data: { phase: 'end', aborted: true },
+    }, 3);
+    await vi.advanceTimersByTimeAsync(1499);
+    expect(requests.some((request) => request.method === 'chat.send')).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
 
-  expect(session.messages.find((message) => message.id === 'msg-2')?.content).toBe(recoveredPlan);
-  expect(session.messages.some((message) => message.content === preface)).toBe(false);
+    const recoveryRequest = requests.find((request) => request.method === 'chat.send');
+    expect(recoveryRequest?.params).toMatchObject({
+      sessionKey,
+      deliver: false,
+      message: expect.stringContaining('Plan Mode safety recovery instruction'),
+    });
+    expect(recoveryRequest?.params.message).toContain('Do not call any tools');
+    expect(turn.planModeSafetyRecoveryPending).toBe(false);
+    expect(turn.knownRunIds.has('run-plan-safe-recovery')).toBe(true);
+    expect(session.status).toBe('running');
+    expect(session.messages.some((message) => message.metadata?.isTimeout)).toBe(false);
+
+    const recoveredPlan = '<proposed_plan>\n## Summary\n- Build the bakery page.\n</proposed_plan>';
+    adapter.processAgentAssistantText({
+      runId: 'run-plan-safe-recovery',
+      sessionKey,
+      stream: 'assistant',
+      data: { text: recoveredPlan },
+    });
+
+    expect(session.messages.find((message) => message.id === 'msg-2')?.content).toBe(recoveredPlan);
+    expect(session.messages.some((message) => message.content === preface)).toBe(false);
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 test('repeated blocked mutation in one plan turn stops instead of looping recovery', async () => {
