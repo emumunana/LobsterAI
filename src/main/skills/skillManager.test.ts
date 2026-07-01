@@ -10,7 +10,7 @@ vi.mock('electron', () => ({
   session: { defaultSession: { webRequest: { onBeforeSendHeaders: vi.fn() } } },
 }));
 
-vi.mock('./libs/nodeRuntime', () => nodeRuntimeMocks);
+vi.mock('../libs/nodeRuntime', () => nodeRuntimeMocks);
 
 import { __skillManagerTestUtils } from './skillManager';
 

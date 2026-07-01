@@ -12,7 +12,7 @@ vi.mock('electron', () => ({
   },
 }));
 
-vi.mock('./nodeRuntime', () => nodeRuntimeMocks);
+vi.mock('../libs/nodeRuntime', () => nodeRuntimeMocks);
 
 import { __pluginManagerTestUtils } from './pluginManager';
 

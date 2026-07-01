@@ -12,7 +12,7 @@ vi.mock('electron', () => ({
   },
 }));
 
-vi.mock('./libs/nodeRuntime', () => nodeRuntimeMocks);
+vi.mock('../libs/nodeRuntime', () => nodeRuntimeMocks);
 
 import { __skillServicesTestUtils } from './skillServices';
 

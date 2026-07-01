@@ -2,8 +2,8 @@ import { ipcMain } from 'electron';
 import fs from 'fs';
 import path from 'path';
 
-import type { SkillManager } from '../../skillManager';
 import { updatePluginSkillIdsFromReport } from '../../skills';
+import type { SkillManager } from '../../skills/skillManager';
 
 export interface SkillHandlerDeps {
   getSkillManager: () => SkillManager;

@@ -5,11 +5,11 @@ import os from 'os';
 import path from 'path';
 
 import type { CoworkStore, PluginSource } from '../coworkStore';
-import { resolveNodePackageCliCommand } from './nodeRuntime';
+import { resolveNodePackageCliCommand } from '../libs/nodeRuntime';
 import {
   findThirdPartyExtensionsDir,
   listBundledOpenClawExtensionManifests,
-} from './openclawLocalExtensions';
+} from '../libs/openclawLocalExtensions';
 
 export interface PluginInstallParams {
   source: PluginSource;

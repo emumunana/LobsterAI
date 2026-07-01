@@ -7,10 +7,10 @@ import { app } from 'electron';
 import fs from 'fs';
 import path from 'path';
 
-import { cpRecursiveSync } from './fsCompat';
-import { getElectronNodeRuntimePath } from './libs/coworkUtil';
-import { resolveNodeRuntimeForSpawn } from './libs/nodeRuntime';
-import { appendPythonRuntimeToEnv } from './libs/pythonRuntime';
+import { cpRecursiveSync } from '../fsCompat';
+import { getElectronNodeRuntimePath } from '../libs/coworkUtil';
+import { resolveNodeRuntimeForSpawn } from '../libs/nodeRuntime';
+import { appendPythonRuntimeToEnv } from '../libs/pythonRuntime';
 
 /**
  * Resolve the user's login shell PATH on macOS/Linux.
