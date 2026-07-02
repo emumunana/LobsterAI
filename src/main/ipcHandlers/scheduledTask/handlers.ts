@@ -7,6 +7,7 @@ import {
   SessionTarget as STSessionTarget,
 } from '../../../scheduledTask/constants';
 import type { CronJobService } from '../../../scheduledTask/cronJobService';
+import { OpenClawEnginePhase } from '../../../shared/openclawEngine/constants';
 import { PlatformRegistry } from '../../../shared/platform';
 import { listScheduledTaskChannels } from './helpers';
 
@@ -43,6 +44,7 @@ export interface ScheduledTaskHandlerDeps {
   } | null;
   getOpenClawRuntimeAdapter: () => {
     getGatewayClient: () => unknown;
+    getEngineStatusSnapshot: () => { phase: OpenClawEnginePhase };
     connectGatewayIfNeeded: () => Promise<void>;
     fetchSessionByKey: (
       sessionKey: string,
@@ -109,6 +111,13 @@ async function ensureScheduledTaskGatewayClient(
   const adapter = getOpenClawRuntimeAdapter();
   if (!adapter) return false;
   if (adapter.getGatewayClient()) return true;
+
+  // While the engine is still installing/starting, report not-ready instead
+  // of blocking on gateway startup; the renderer reloads via the refresh
+  // event after the first successful cron poll.
+  if (adapter.getEngineStatusSnapshot().phase !== OpenClawEnginePhase.Running) {
+    return false;
+  }
 
   await adapter.connectGatewayIfNeeded();
   return Boolean(adapter.getGatewayClient());

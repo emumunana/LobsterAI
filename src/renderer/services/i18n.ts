@@ -5376,13 +5376,28 @@ const translations: Record<LanguageType, Record<string, string>> = {
   },
 };
 
+// localStorage key read by index.html's pre-React splash to localize its title
+const LANGUAGE_HINT_STORAGE_KEY = 'lobster-language';
+
+// 初始化完成前的语言：优先上次启动持久化的提示，其次系统语言（与 splash 的推断逻辑一致）
+const readLanguageHint = (): LanguageType => {
+  try {
+    const hint = localStorage.getItem(LANGUAGE_HINT_STORAGE_KEY);
+    if (hint === 'zh' || hint === 'en') {
+      return hint;
+    }
+    return navigator.language === 'zh-CN' ? 'zh' : 'en';
+  } catch {
+    return 'zh';
+  }
+};
+
 class I18nService {
   private currentLanguage: LanguageType = 'zh';
   private listeners = new Set<() => void>();
 
   constructor() {
-    // 默认使用中文
-    this.currentLanguage = 'zh';
+    this.currentLanguage = readLanguageHint();
   }
 
   // 初始化语言设置
@@ -5449,6 +5464,14 @@ class I18nService {
       // 默认使用英文
       this.currentLanguage = 'en';
     }
+    this.persistLanguageHint(this.currentLanguage);
+  }
+
+  // 持久化语言提示，供 index.html 的启动屏在下次启动时读取
+  private persistLanguageHint(language: LanguageType): void {
+    try {
+      localStorage.setItem(LANGUAGE_HINT_STORAGE_KEY, language);
+    } catch { /* storage unavailable */ }
   }
 
   // 根据系统语言推断应用语言
@@ -5473,6 +5496,8 @@ class I18nService {
     if (!persist) {
       return;
     }
+
+    this.persistLanguageHint(language);
 
     // 更新配置
     try {

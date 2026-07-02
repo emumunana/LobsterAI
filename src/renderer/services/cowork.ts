@@ -1393,6 +1393,11 @@ class CoworkService {
     return this.loadOpenClawEngineStatus();
   }
 
+  /** Last known engine status without an IPC round-trip (may be stale/null). */
+  getOpenClawEngineStatusSnapshot(): OpenClawEngineStatus | null {
+    return this.openClawStatus;
+  }
+
   async installOpenClawEngine(): Promise<OpenClawEngineStatus | null> {
     const engineApi = window.electron?.openclaw?.engine;
     if (!engineApi?.install) {

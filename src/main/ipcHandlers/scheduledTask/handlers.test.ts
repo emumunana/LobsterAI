@@ -14,9 +14,10 @@ vi.mock('electron', () => ({
 
 import { IpcChannel as ScheduledTaskIpc } from '../../../scheduledTask/constants';
 import type { CronJobService } from '../../../scheduledTask/cronJobService';
+import { OpenClawEnginePhase } from '../../../shared/openclawEngine/constants';
 import { registerScheduledTaskHandlers, type ScheduledTaskHandlerDeps } from './handlers';
 
-function makeDeps() {
+function makeDeps(enginePhase: OpenClawEnginePhase = OpenClawEnginePhase.Running) {
   let gatewayClient: unknown = null;
   const cronJobService = {
     listJobs: vi.fn(async () => []),
@@ -24,6 +25,7 @@ function makeDeps() {
   };
   const adapter = {
     getGatewayClient: vi.fn(() => gatewayClient),
+    getEngineStatusSnapshot: vi.fn(() => ({ phase: enginePhase })),
     connectGatewayIfNeeded: vi.fn(async () => {
       gatewayClient = {};
     }),
@@ -69,5 +71,17 @@ describe('registerScheduledTaskHandlers', () => {
     expect(adapter.connectGatewayIfNeeded).toHaveBeenCalledTimes(1);
     expect(cronJobService.listAllRuns).toHaveBeenCalledWith(20, 0, undefined);
     expect(result).toEqual({ success: true, ready: true, runs: [] });
+  });
+
+  test('reports not-ready without blocking while the engine is still starting', async () => {
+    const { adapter, cronJobService, deps } = makeDeps(OpenClawEnginePhase.Starting);
+    registerScheduledTaskHandlers(deps);
+
+    const handler = registeredHandlers.get(ScheduledTaskIpc.List);
+    const result = await handler?.();
+
+    expect(adapter.connectGatewayIfNeeded).not.toHaveBeenCalled();
+    expect(cronJobService.listJobs).not.toHaveBeenCalled();
+    expect(result).toEqual({ success: true, ready: false, tasks: [] });
   });
 });

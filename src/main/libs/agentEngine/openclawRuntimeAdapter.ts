@@ -51,6 +51,7 @@ import {
 import { OPENCLAW_AGENT_TIMEOUT_SECONDS } from '../openclawConfigSync';
 import {
   OpenClawEngineManager,
+  type OpenClawEngineStatus,
   type OpenClawGatewayConnectionInfo,
 } from '../openclawEngineManager';
 import {
@@ -9487,6 +9488,15 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
    */
   getGatewayClient(): GatewayClientLike | null {
     return this.gatewayClient;
+  }
+
+  /**
+   * Current engine status without starting or waiting for anything.
+   * Lets IPC handlers report not-ready quickly instead of blocking on
+   * gateway startup.
+   */
+  getEngineStatusSnapshot(): OpenClawEngineStatus {
+    return this.engineManager.getStatus();
   }
 
   getSessionKeysForSession(sessionId: string): string[] {
