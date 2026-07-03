@@ -1501,6 +1501,7 @@ interface IElectronAPI {
     }>;
     getProfileSummary: () => Promise<{ success: boolean; data?: ProfileSummaryData }>;
     getActiveClientBanner: () => Promise<{ success: boolean; data?: ClientBannerData | null }>;
+    getActiveClientBanners: () => Promise<{ success: boolean; data?: ClientBannerData[] }>;
     getPendingCallback: () => Promise<string | null>;
     onCallback: (callback: (data: { code: string }) => void) => () => void;
     onQuotaChanged: (callback: () => void) => () => void;

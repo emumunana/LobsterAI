@@ -5012,15 +5012,25 @@ if (!gotTheLock) {
     try {
       const serverBaseUrl = getServerApiBaseUrl();
       const url = appendKeyfromQuery(`${serverBaseUrl}/api/client-banners/active?placement=desktop_sidebar`);
-      const tokens = getAuthTokens();
-      const requestOptions: RequestInit = tokens
-        ? { headers: { Authorization: `Bearer ${tokens.accessToken}` } }
-        : {};
-      const resp = await net.fetch(url, requestOptions);
+      const resp = await net.fetch(url);
       if (!resp.ok) return { success: false };
       const body = (await resp.json()) as { code: number; data: Record<string, unknown> | null };
       if (body.code !== 0) return { success: false };
       return { success: true, data: body.data ?? null };
+    } catch {
+      return { success: false };
+    }
+  });
+
+  ipcMain.handle('auth:getActiveClientBanners', async () => {
+    try {
+      const serverBaseUrl = getServerApiBaseUrl();
+      const url = appendKeyfromQuery(`${serverBaseUrl}/api/client-banners/active-list?placement=desktop_sidebar`);
+      const resp = await net.fetch(url);
+      if (!resp.ok) return { success: false };
+      const body = (await resp.json()) as { code: number; data: Record<string, unknown>[] | null };
+      if (body.code !== 0) return { success: false };
+      return { success: true, data: Array.isArray(body.data) ? body.data : [] };
     } catch {
       return { success: false };
     }

@@ -1,74 +1,35 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { useSelector } from 'react-redux';
 
 import { getPortalInvitationUrl } from '../services/endpoints';
 import { i18nService } from '../services/i18n';
-import { RootState } from '../store';
-
-interface ClientBanner {
-  id: number;
-  activityDescription: string;
-  linkUrl: string;
-  imageUrl: string;
-  imageWidth?: number;
-  imageHeight?: number;
-  updatedAt?: string;
-}
-
-interface DismissState {
-  closeCount: number;
-  closedAt: number;
-}
-
-const storageKeyFor = (userKey: string, banner: ClientBanner) => (
-  `client_sidebar_banner.${userKey}.${banner.id}.${banner.updatedAt ?? 'v1'}`
-);
-
-const readDismissState = (key: string): DismissState | null => {
-  try {
-    const raw = localStorage.getItem(key);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as Partial<DismissState>;
-    if (typeof parsed.closeCount !== 'number' || typeof parsed.closedAt !== 'number') {
-      return null;
-    }
-    return { closeCount: parsed.closeCount, closedAt: parsed.closedAt };
-  } catch {
-    return null;
-  }
-};
-
-const shouldShowBanner = (state: DismissState | null) => {
-  if (!state) return true;
-  return state.closeCount < 1;
-};
+import {
+  type ClientBanner,
+  getSidebarBannerStorageKey,
+  readSidebarBannerDismissState,
+  saveSidebarBannerDismissState,
+  shouldShowSidebarBanner,
+} from './sidebarAdBannerState';
 
 const SidebarAdBanner: React.FC = () => {
-  const user = useSelector((state: RootState) => state.auth.user);
-  const profileSummary = useSelector((state: RootState) => state.auth.profileSummary);
-  const [banner, setBanner] = useState<ClientBanner | null>(null);
-  const [hiddenKey, setHiddenKey] = useState<string | null>(null);
-
-  const userKey = profileSummary?.id?.toString()
-    ?? user?.id?.toString()
-    ?? user?.userId
-    ?? user?.yid
-    ?? 'anonymous';
+  const [banners, setBanners] = useState<ClientBanner[]>([]);
+  const [currentIndex, setCurrentIndex] = useState(0);
+  const [hiddenKey, setHiddenKey] = useState<string | null | undefined>(undefined);
 
   useEffect(() => {
     let isCurrent = true;
 
     const loadBanner = async () => {
       try {
-        const result = await window.electron.auth.getActiveClientBanner();
+        const result = await window.electron.auth.getActiveClientBanners();
         if (!isCurrent) return;
-        if (result.success && result.data) {
-          setBanner(result.data as ClientBanner);
+        if (result.success && Array.isArray(result.data)) {
+          setBanners(result.data as ClientBanner[]);
+          setCurrentIndex(0);
         } else {
-          setBanner(null);
+          setBanners([]);
         }
       } catch {
-        if (isCurrent) setBanner(null);
+        if (isCurrent) setBanners([]);
       }
     };
 
@@ -76,30 +37,55 @@ const SidebarAdBanner: React.FC = () => {
     return () => {
       isCurrent = false;
     };
-  }, [userKey]);
+  }, []);
 
   const storageKey = useMemo(() => (
-    banner ? storageKeyFor(userKey, banner) : null
-  ), [banner, userKey]);
+    banners.length > 0 ? getSidebarBannerStorageKey(banners) : null
+  ), [banners]);
 
   useEffect(() => {
     if (!storageKey) {
       setHiddenKey(null);
       return;
     }
-    const dismissState = readDismissState(storageKey);
-    setHiddenKey(shouldShowBanner(dismissState) ? null : storageKey);
+    let isCurrent = true;
+    setHiddenKey(undefined);
+
+    const loadDismissState = async () => {
+      const dismissState = await readSidebarBannerDismissState(storageKey);
+      if (isCurrent) {
+        setHiddenKey(shouldShowSidebarBanner(dismissState) ? null : storageKey);
+      }
+    };
+
+    void loadDismissState();
+    return () => {
+      isCurrent = false;
+    };
   }, [storageKey]);
 
-  if (!banner || !storageKey || hiddenKey === storageKey) {
+  useEffect(() => {
+    if (banners.length <= 1 || !storageKey || hiddenKey === undefined || hiddenKey === storageKey) {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      setCurrentIndex((index) => (index + 1) % banners.length);
+    }, 5000);
+    return () => window.clearInterval(timer);
+  }, [banners.length, hiddenKey, storageKey]);
+
+  const banner = banners.length > 0 ? banners[currentIndex % banners.length] : null;
+
+  if (!banner || !storageKey || hiddenKey === undefined || hiddenKey === storageKey) {
     return null;
   }
 
   const dismiss = (event: React.MouseEvent<HTMLButtonElement>) => {
     event.stopPropagation();
-    const next: DismissState = { closeCount: 1, closedAt: Date.now() };
-    localStorage.setItem(storageKey, JSON.stringify(next));
     setHiddenKey(storageKey);
+    void saveSidebarBannerDismissState(storageKey).catch(() => {
+      setHiddenKey(storageKey);
+    });
   };
 
   const openBanner = async () => {
