@@ -35,7 +35,7 @@ const SubagentTurnLinks: React.FC<SubagentTurnLinksProps> = ({
           type="button"
           onClick={() => onSelectSubagent(subagent)}
           className="inline-flex h-8 max-w-full items-center gap-2 rounded-full border border-border bg-background px-3 text-sm text-secondary shadow-sm transition-colors hover:border-primary/40 hover:text-foreground"
-          title={subagent.task || getDisplayName(subagent)}
+          aria-label={getDisplayName(subagent)}
         >
           <span
             className={`h-2 w-2 shrink-0 rounded-full ${
