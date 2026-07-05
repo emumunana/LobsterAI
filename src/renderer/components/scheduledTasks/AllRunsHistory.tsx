@@ -21,7 +21,7 @@ const STATUS_OPTIONS = [
 ] as const;
 
 const historyPageClass = 'px-6 py-4 sm:px-8 lg:px-10';
-const historyContentClass = 'mx-auto w-full max-w-[760px]';
+const historyContentClass = 'mx-auto w-full max-w-[880px]';
 const historyGridClass = 'grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_88px] items-center gap-3';
 
 const statusConfig: Record<TaskStatus, { label: string; color: string; activeColor: string }> = {
@@ -234,7 +234,7 @@ const AllRunsHistory: React.FC = () => {
         {!isEmpty && (
           <div className="overflow-hidden rounded-lg border border-border-subtle bg-surface">
             {/* Column headers */}
-            <div className={`${historyGridClass} bg-surface/30 px-5 py-2.5`}>
+            <div className={`${historyGridClass} border-b border-border-subtle bg-surface-raised/40 px-5 py-2.5`}>
               <div className="text-xs font-medium text-secondary">
                 {i18nService.t('scheduledTasksHistoryColTitle')}
               </div>
@@ -321,6 +321,8 @@ const AllRunsHistory: React.FC = () => {
 
         {viewingRun && (
           <RunSessionModal
+            taskName={viewingRun.taskName}
+            runStartedAt={viewingRun.startedAt}
             sessionId={viewingRun.sessionId}
             sessionKey={viewingRun.sessionKey}
             runSummary={viewingRun.summary}

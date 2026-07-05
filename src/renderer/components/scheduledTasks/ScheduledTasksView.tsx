@@ -16,6 +16,7 @@ import DeleteConfirmModal from './DeleteConfirmModal';
 import TaskDetail from './TaskDetail';
 import TaskForm from './TaskForm';
 import TaskList from './TaskList';
+import type { ScheduledTaskTemplate } from './taskTemplates';
 
 interface ScheduledTasksViewProps {
   isSidebarCollapsed?: boolean;
@@ -27,7 +28,7 @@ interface ScheduledTasksViewProps {
 type TabType = 'tasks' | 'history';
 
 const pageGutterClass = 'px-6 sm:px-8 lg:px-10';
-const pageContentClass = 'mx-auto flex w-full max-w-[760px] items-center justify-between';
+const pageContentClass = 'mx-auto w-full max-w-[880px]';
 
 type DeleteTaskInfo = {
   id: string;
@@ -51,6 +52,7 @@ const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
   const availableModels = useSelector((state: RootState) => state.model.availableModels);
   const selectedTask = selectedTaskId ? (tasks.find(t => t.id === selectedTaskId) ?? null) : null;
   const [activeTab, setActiveTab] = useState<TabType>('tasks');
+  const [createTemplate, setCreateTemplate] = useState<ScheduledTaskTemplate | null>(null);
   const [deleteTaskInfo, setDeleteTaskInfo] = useState<DeleteTaskInfo | null>(null);
   const isFormDirtyRef = useRef(false);
   const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
@@ -139,6 +141,7 @@ const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
 
   const handleBackToList = () => {
     const action = () => {
+      setCreateTemplate(null);
       dispatch(selectTask(null));
       dispatch(setViewMode('list'));
     };
@@ -148,6 +151,30 @@ const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
       action();
     }
   };
+
+  const handleCreateNew = useCallback(() => {
+    reportScheduledTaskAction('new_task', {
+      source: 'scheduled_tasks_view',
+      activeTab,
+      viewMode,
+    });
+    setCreateTemplate(null);
+    dispatch(setViewMode('create'));
+  }, [activeTab, dispatch, viewMode]);
+
+  const handleCreateFromTemplate = useCallback(
+    (template: ScheduledTaskTemplate) => {
+      reportScheduledTaskAction('new_task_from_template', {
+        source: 'scheduled_tasks_list',
+        templateId: template.id,
+        activeTab,
+        viewMode,
+      });
+      setCreateTemplate(template);
+      dispatch(setViewMode('create'));
+    },
+    [activeTab, dispatch, viewMode],
+  );
 
   const handleEditCancel = useCallback(() => {
     requestLeave(() => dispatch(setViewMode('detail')));
@@ -210,54 +237,49 @@ const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
         <WindowTitleBar inline />
       </div>
 
-      {/* Tabs + New Task button */}
+      {/* Page header: title + subtitle + tabs + New Task button */}
       {showTabs && (
         <div className="shrink-0">
-          <div className={pageGutterClass}>
+          <div className={`${pageGutterClass} pt-5 pb-1`}>
             <div className={pageContentClass}>
-              <div className="flex">
-                <button
-                  type="button"
-                  onClick={() => handleTabChange('tasks')}
-                  className={`px-4 py-2.5 text-[14px] font-normal leading-5 transition-colors relative ${
-                    activeTab === 'tasks' ? 'text-foreground' : 'text-secondary hover:text-foreground'
-                  }`}
-                >
-                  {i18nService.t('scheduledTasksTabTasks')}
-                  {activeTab === 'tasks' && (
-                    <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary rounded-t" />
-                  )}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleTabChange('history')}
-                  className={`px-4 py-2.5 text-[14px] font-normal leading-5 transition-colors relative ${
-                    activeTab === 'history' ? 'text-foreground' : 'text-secondary hover:text-foreground'
-                  }`}
-                >
-                  {i18nService.t('scheduledTasksTabHistory')}
-                  {activeTab === 'history' && (
-                    <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary rounded-t" />
-                  )}
-                </button>
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <h2 className="text-xl font-semibold text-foreground">
+                    {i18nService.t('scheduledTasksTitle')}
+                  </h2>
+                  <p className="mt-1 text-sm text-secondary">
+                    {i18nService.t('scheduledTasksPageSubtitle')}
+                  </p>
+                </div>
+                {activeTab === 'tasks' && (
+                  <button
+                    type="button"
+                    onClick={handleCreateNew}
+                    disabled={taskListStatus !== ScheduledTaskDataStatus.Ready}
+                    className="shrink-0 rounded-lg bg-primary px-3.5 py-1.5 text-[14px] font-medium leading-5 text-white transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-primary"
+                  >
+                    {i18nService.t('scheduledTasksNewTask')}
+                  </button>
+                )}
               </div>
-              {activeTab === 'tasks' && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    reportScheduledTaskAction('new_task', {
-                      source: 'scheduled_tasks_view',
-                      activeTab,
-                      viewMode,
-                    });
-                    dispatch(setViewMode('create'));
-                  }}
-                  disabled={taskListStatus !== ScheduledTaskDataStatus.Ready}
-                  className="px-3 py-1 text-[14px] font-normal leading-5 bg-primary text-white rounded-lg hover:bg-primary-hover transition-colors disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-primary"
-                >
-                  {i18nService.t('scheduledTasksNewTask')}
-                </button>
-              )}
+              <div className="mt-4 inline-flex rounded-lg bg-surface-raised p-0.5">
+                {(['tasks', 'history'] as const).map(tab => (
+                  <button
+                    key={tab}
+                    type="button"
+                    onClick={() => handleTabChange(tab)}
+                    className={`rounded-md px-3.5 py-1 text-[13px] leading-5 transition-colors ${
+                      activeTab === tab
+                        ? 'bg-surface text-foreground shadow-subtle font-medium'
+                        : 'text-secondary hover:text-foreground'
+                    }`}
+                  >
+                    {i18nService.t(
+                      tab === 'tasks' ? 'scheduledTasksTabTasks' : 'scheduledTasksTabHistory',
+                    )}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
         </div>
@@ -271,12 +293,20 @@ const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
           <AllRunsHistory />
         ) : (
           <>
-            {viewMode === 'list' && <TaskList onRequestDelete={handleRequestDelete} />}
+            {viewMode === 'list' && (
+              <TaskList
+                onRequestDelete={handleRequestDelete}
+                onCreateNew={handleCreateNew}
+                onCreateFromTemplate={handleCreateFromTemplate}
+              />
+            )}
             {viewMode === 'create' && (
               <TaskForm
                 mode="create"
+                initialTemplate={createTemplate}
                 onCancel={handleBackToList}
                 onSaved={newTaskId => {
+                  setCreateTemplate(null);
                   if (newTaskId) {
                     dispatch(selectTask(newTaskId));
                     dispatch(setViewMode('detail'));

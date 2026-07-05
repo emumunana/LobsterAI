@@ -1,4 +1,8 @@
-import { CheckIcon } from '@heroicons/react/24/outline';
+import {
+  ArrowsPointingInIcon,
+  ArrowsPointingOutIcon,
+  CheckIcon,
+} from '@heroicons/react/24/outline';
 import { PlatformRegistry } from '@shared/platform';
 import React, { useEffect, useRef, useState } from 'react';
 import { useSelector } from 'react-redux';
@@ -16,6 +20,7 @@ import { scheduledTaskService } from '../../services/scheduledTask';
 import { RootState } from '../../store';
 import type { Model } from '../../store/slices/modelSlice';
 import { resolveOpenClawModelRef, toOpenClawModelRef } from '../../utils/openclawModelRef';
+import Modal from '../common/Modal';
 import ModelSelector from '../ModelSelector';
 import {
   getDeliveryAnalyticsParams,
@@ -28,6 +33,7 @@ import {
 import ScheduledTaskTemplatePickerModal from './ScheduledTaskTemplatePickerModal';
 import { SCHEDULED_TASK_TEMPLATES, type ScheduledTaskTemplate } from './taskTemplates';
 import {
+  channelOptionMatchesSelection,
   conversationOptionMatchesValue,
   formatChannelOptionLabel,
   formatConversationOptionLabel,
@@ -319,6 +325,23 @@ const TaskForm: React.FC<TaskFormProps> = ({
   const [appliedTemplate, setAppliedTemplate] = useState<ScheduledTaskTemplate | null>(
     () => (mode === 'create' ? initialTemplate : null),
   );
+  const [payloadEditorOpen, setPayloadEditorOpen] = useState(false);
+  const payloadEditorTextareaRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    if (!payloadEditorOpen) return;
+    const textarea = payloadEditorTextareaRef.current;
+    if (textarea) {
+      textarea.focus();
+      const end = textarea.value.length;
+      textarea.setSelectionRange(end, end);
+    }
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setPayloadEditorOpen(false);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [payloadEditorOpen]);
 
   const isDirty = JSON.stringify(form) !== initialFormRef.current;
 
@@ -382,8 +405,8 @@ const TaskForm: React.FC<TaskFormProps> = ({
     }
 
     let cancelled = false;
-    const selectedChannelOption = channelOptions.find(
-      (option) => option.value === form.notifyChannel && option.accountId === form.notifyAccountId,
+    const selectedChannelOption = channelOptions.find(option =>
+      channelOptionMatchesSelection(option, form.notifyChannel, form.notifyAccountId),
     );
     setConversationsLoading(true);
     void scheduledTaskService.listChannelConversations(
@@ -663,7 +686,7 @@ const TaskForm: React.FC<TaskFormProps> = ({
     'w-full rounded-lg border border-border bg-surface px-3 py-1.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50';
   const textareaInputClass =
     'w-full rounded-t-lg px-3 py-2 text-sm text-foreground focus:outline-none resize-none bg-transparent';
-  const labelClass = 'block text-[14px] font-normal leading-5 text-foreground/85 mb-1';
+  const labelClass = 'block text-[13px] font-medium leading-5 text-foreground/85 mb-1';
   const errorClass = 'text-xs text-red-500 mt-1';
   const hintClass = 'text-xs text-secondary mt-0.5';
 
@@ -1246,8 +1269,8 @@ const TaskForm: React.FC<TaskFormProps> = ({
                 )}
                 <span className="truncate">
                   {(() => {
-                    const selected = channelOptions.find(
-                      o => o.value === form.notifyChannel && o.accountId === form.notifyAccountId,
+                    const selected = channelOptions.find(o =>
+                      channelOptionMatchesSelection(o, form.notifyChannel, form.notifyAccountId),
                     );
                     return selected
                       ? formatChannelOptionLabel(selected, channelOptions)
@@ -1300,11 +1323,11 @@ const TaskForm: React.FC<TaskFormProps> = ({
                   {channelOptions.map(channel => {
                     const logo = getChannelLogo(channel.value);
                     const displayName = formatChannelOptionLabel(channel, channelOptions);
-                    const isActive =
-                      form.notifyChannel === channel.value &&
-                      (channel.accountId
-                        ? form.notifyAccountId === channel.accountId
-                        : !form.notifyAccountId);
+                    const isActive = channelOptionMatchesSelection(
+                      channel,
+                      form.notifyChannel,
+                      form.notifyAccountId,
+                    );
                     return (
                       <button
                         type="button"
@@ -1343,7 +1366,7 @@ const TaskForm: React.FC<TaskFormProps> = ({
               </div>
             )}
         </div>
-        {showConversationSelector && (
+        {showConversationSelector ? (
           errors.notifyTo ? (
             <p className={errorClass}>{errors.notifyTo}</p>
           ) : conversationsLoading ? (
@@ -1362,6 +1385,10 @@ const TaskForm: React.FC<TaskFormProps> = ({
               {i18nService.t('scheduledTasksFormNotifyNoConversationHint')}
             </p>
           )
+        ) : (
+          <p className={hintClass}>
+            {i18nService.t('scheduledTasksFormNotifyChannelHint')}
+          </p>
         )}
       </div>
     );
@@ -1374,13 +1401,18 @@ const TaskForm: React.FC<TaskFormProps> = ({
     <div className="flex flex-col min-h-0 h-full">
       {/* Scrollable form body */}
       <div className={`flex-1 overflow-y-auto min-h-0 ${formPageClass}`}>
-        <div className={`${formContentClass} space-y-4`}>
-          <div className="flex items-center justify-between gap-3">
-            <h2 className="text-[14px] font-normal leading-5 text-foreground/85">
-              {mode === 'create'
-                ? i18nService.t('scheduledTasksFormCreate')
-                : i18nService.t('scheduledTasksFormUpdate')}
-            </h2>
+        <div className={`${formContentClass} space-y-5`}>
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <h2 className="text-xl font-semibold text-foreground">
+                {mode === 'create'
+                  ? i18nService.t('scheduledTasksFormCreate')
+                  : i18nService.t('scheduledTasksFormUpdate')}
+              </h2>
+              <p className="mt-1 text-sm text-secondary">
+                {i18nService.t('scheduledTasksFormSubtitle')}
+              </p>
+            </div>
             {mode === 'create' && (
               <button
                 type="button"
@@ -1419,24 +1451,47 @@ const TaskForm: React.FC<TaskFormProps> = ({
 
           {/* Prompt / payload */}
           <div>
-            <div className="flex items-end justify-between mb-1">
+            <div className={`flex items-end justify-between ${isSystemEventTask ? 'mb-1' : ''}`}>
               <label className={labelClass} style={{ marginBottom: 0 }}>
                 {i18nService.t('scheduledTasksFormPayloadTextAgent')}<span className="text-red-500 dark:text-red-400 ml-0.5">*</span>
               </label>
-              <span className="text-xs text-secondary tabular-nums">
-                {i18nService
-                  .t('scheduledTasksFormCharCount' as Parameters<typeof i18nService.t>[0])
-                  .replace('{count}', String(payloadCharCount))}
-              </span>
+              {payloadCharCount > 0 && (
+                <span className="text-xs text-secondary tabular-nums">
+                  {i18nService
+                    .t('scheduledTasksFormCharCount' as Parameters<typeof i18nService.t>[0])
+                    .replace('{count}', String(payloadCharCount))}
+                </span>
+              )}
             </div>
-            <div className="rounded-lg border border-border bg-surface focus-within:ring-2 focus-within:ring-primary/50">
+            {!isSystemEventTask && (
+              <p className="mt-0.5 mb-1.5 text-xs text-secondary">
+                {i18nService.t('scheduledTasksFormPayloadTextAgentHint')}
+              </p>
+            )}
+            <div className="relative rounded-lg border border-border bg-surface focus-within:ring-2 focus-within:ring-primary/50">
               <textarea
                 value={form.payloadText}
                 onChange={event => updateForm({ payloadText: event.target.value })}
                 className={`${textareaInputClass} resize-y`}
-                style={{ minHeight: '80px', height: '120px' }}
+                style={{ minHeight: '80px', height: '120px', paddingRight: '2.5rem' }}
                 placeholder={i18nService.t('scheduledTasksFormPromptPlaceholder')}
               />
+              <button
+                type="button"
+                onClick={() => {
+                  reportScheduledTaskAction('payload_editor_open', {
+                    source: 'scheduled_task_form',
+                    mode,
+                    charCount: payloadCharCount,
+                  });
+                  setPayloadEditorOpen(true);
+                }}
+                title={i18nService.t('scheduledTasksFormPayloadExpand')}
+                aria-label={i18nService.t('scheduledTasksFormPayloadExpand')}
+                className="absolute right-2 top-2 rounded-md p-1.5 text-secondary/70 hover:bg-surface-raised hover:text-foreground transition-colors"
+              >
+                <ArrowsPointingOutIcon className="h-4 w-4" />
+              </button>
               {!isSystemEventTask && (
                 <div className="flex items-center gap-2 px-2 py-1 border-t border-border/40">
                   <ModelSelector
@@ -1487,7 +1542,7 @@ const TaskForm: React.FC<TaskFormProps> = ({
       )}
 
       {/* Footer */}
-      <div className="shrink-0 px-6 py-3 sm:px-8 lg:px-10">
+      <div className="shrink-0 border-t border-border/60 px-6 py-3 sm:px-8 lg:px-10">
         <div className={`${formContentClass} flex items-center justify-end gap-2`}>
           <button
             type="button"
@@ -1539,6 +1594,57 @@ const TaskForm: React.FC<TaskFormProps> = ({
         }}
         onSelect={handleApplyTemplate}
       />
+    )}
+    {payloadEditorOpen && (
+      <Modal
+        isOpen
+        onClose={() => setPayloadEditorOpen(false)}
+        overlayClassName="fixed inset-0 z-[60] flex items-center justify-center bg-black/10 dark:bg-black/50 p-6"
+        className="flex h-[min(720px,calc(100vh-48px))] w-[min(960px,calc(100vw-48px))] flex-col overflow-hidden rounded-xl border border-surface bg-surface shadow-[0_12px_40px_rgba(0,0,0,0.16)]"
+      >
+        <div className="flex shrink-0 items-start justify-between gap-3 px-5 py-4">
+          <div className="min-w-0">
+            <h2 className="text-lg font-semibold text-foreground">
+              {i18nService.t('scheduledTasksFormPayloadTextAgent')}
+            </h2>
+            {!isSystemEventTask && (
+              <p className="mt-0.5 text-sm text-secondary">
+                {i18nService.t('scheduledTasksFormPayloadTextAgentHint')}
+              </p>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={() => setPayloadEditorOpen(false)}
+            title={i18nService.t('scheduledTasksFormPayloadCollapse')}
+            aria-label={i18nService.t('scheduledTasksFormPayloadCollapse')}
+            className="p-2 rounded-lg hover:bg-surface-raised transition-colors"
+          >
+            <ArrowsPointingInIcon className="h-5 w-5 text-secondary" />
+          </button>
+        </div>
+        <textarea
+          ref={payloadEditorTextareaRef}
+          value={form.payloadText}
+          onChange={event => updateForm({ payloadText: event.target.value })}
+          placeholder={i18nService.t('scheduledTasksFormPromptPlaceholder')}
+          className="min-h-0 w-full flex-1 resize-none bg-transparent px-5 pt-1 pb-4 text-sm leading-6 text-foreground focus:outline-none"
+        />
+        <div className="flex shrink-0 items-center justify-between border-t border-border/60 px-5 py-3">
+          <span className="text-xs text-secondary tabular-nums">
+            {i18nService
+              .t('scheduledTasksFormCharCount' as Parameters<typeof i18nService.t>[0])
+              .replace('{count}', String(payloadCharCount))}
+          </span>
+          <button
+            type="button"
+            onClick={() => setPayloadEditorOpen(false)}
+            className="px-4 py-1.5 text-[14px] font-normal leading-5 bg-primary text-white rounded-lg hover:bg-primary-hover transition-colors"
+          >
+            {i18nService.t('scheduledTasksFormPayloadEditorDone')}
+          </button>
+        </div>
+      </Modal>
     )}
     </>
   );
