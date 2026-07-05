@@ -5,7 +5,9 @@
  * to local Cowork sessions so that conversations are visible in the LobsterAI UI.
  */
 
-import { PlatformRegistry } from '../../shared/platform';
+import { DeliveryMode as ScheduledTaskDeliveryMode } from '../../scheduledTask/constants';
+import type { ScheduledTaskJobDelivery } from '../../scheduledTask/cronJobService';
+import { parseImConversationId, PlatformRegistry } from '../../shared/platform';
 import type { CoworkSession, CoworkStore } from '../coworkStore';
 import { t } from '../i18n';
 import type { IMStore } from '../im/imStore';
@@ -342,6 +344,9 @@ export interface ChannelSessionSyncDeps {
   getDefaultCwd: (agentId?: string) => string;
   /** Optional synchronous lookup: jobId → human-readable name (for cron session titles). */
   resolveJobName?: (jobId: string) => string | null;
+  /** Optional synchronous lookup: jobId → delivery routing (to suppress local
+   *  cron sessions for jobs that announce into an IM conversation). */
+  resolveJobDelivery?: (jobId: string) => ScheduledTaskJobDelivery | null;
 }
 
 export class OpenClawChannelSessionSync {
@@ -349,6 +354,7 @@ export class OpenClawChannelSessionSync {
   private readonly imStore: IMStore;
   private readonly getDefaultCwd: (agentId?: string) => string;
   private readonly resolveJobName: ((jobId: string) => string | null) | null;
+  private readonly resolveJobDelivery: ((jobId: string) => ScheduledTaskJobDelivery | null) | null;
 
   /** In-memory cache: openclawSessionKey → local sessionId. */
   private readonly syncedSessionKeys = new Map<string, string>();
@@ -368,6 +374,7 @@ export class OpenClawChannelSessionSync {
     this.imStore = deps.imStore;
     this.getDefaultCwd = deps.getDefaultCwd;
     this.resolveJobName = deps.resolveJobName ?? null;
+    this.resolveJobDelivery = deps.resolveJobDelivery ?? null;
   }
 
   private updateLocalSessionCwdIfNeeded(session: CoworkSession, agentId: string): void {
@@ -605,6 +612,36 @@ export class OpenClawChannelSessionSync {
     return null;
   }
 
+  /**
+   * Resolve the local conversation record for a channel delivery target
+   * (e.g. a cron announce that just went out to `channel` + `to`).
+   * Matches the peer id case-insensitively because conversation ids derive
+   * from lowercased session keys while delivery targets keep native casing.
+   * Returns null when no mapping with a usable OpenClaw session key exists.
+   */
+  resolveConversationByDeliveryTarget(
+    channel: string,
+    to: string,
+    accountId?: string,
+  ): { sessionId: string; sessionKey: string } | null {
+    const platform = PlatformRegistry.platformOfChannel(channel);
+    if (!platform) return null;
+    const peer = parseImConversationId(to).peerId.trim().toLowerCase();
+    if (!peer) return null;
+
+    // Mappings are sorted by lastActiveAt DESC; the first match wins.
+    for (const mapping of this.imStore.listSessionMappings(platform)) {
+      const parsed = parseImConversationId(mapping.imConversationId);
+      if (parsed.peerId.trim().toLowerCase() !== peer) continue;
+      if (accountId && parsed.accountId && parsed.accountId !== accountId) continue;
+      const sessionKey = mapping.openClawSessionKey?.trim();
+      if (!sessionKey) continue;
+      if (!this.coworkStore.getSession(mapping.coworkSessionId)) continue;
+      return { sessionId: mapping.coworkSessionId, sessionKey };
+    }
+    return null;
+  }
+
   getOpenClawSessionKeyForCoworkSession(sessionId: string): {
     isChannelSession: boolean;
     sessionKey: string | null;
@@ -667,6 +704,19 @@ export class OpenClawChannelSessionSync {
   resolveOrCreateCronSession(sessionKey: string): string | null {
     const cronKey = parseCronSessionKey(sessionKey);
     if (!cronKey) return null;
+
+    // Jobs that announce their result into an IM conversation don't get a
+    // local "[定时]" session: the delivered message lands in the IM
+    // conversation record, and a per-job session here would duplicate it.
+    // Run transcripts stay accessible from the scheduled-task run history.
+    const delivery = this.resolveJobDelivery?.(cronKey.jobId) ?? null;
+    if (
+      delivery?.mode === ScheduledTaskDeliveryMode.Announce &&
+      delivery.channel &&
+      PlatformRegistry.isIMChannel(delivery.channel)
+    ) {
+      return null;
+    }
 
     const cached = this.syncedSessionKeys.get(cronKey.cacheKey)
       ?? this.syncedSessionKeys.get(sessionKey);

@@ -99,6 +99,14 @@ const scheduledTaskSlice = createSlice({
         task.state = action.payload.taskState;
       }
     },
+    // Optimistic UI: reflect a manual run immediately; the next gateway status
+    // poll overwrites this with the real state.
+    markTaskRunning(state, action: PayloadAction<string>) {
+      const task = state.tasks.find(t => t.id === action.payload);
+      if (task && !task.state.runningAtMs) {
+        task.state.runningAtMs = Date.now();
+      }
+    },
     selectTask(state, action: PayloadAction<string | null>) {
       state.selectedTaskId = action.payload;
       state.viewMode = action.payload ? 'detail' : 'list';
@@ -169,6 +177,7 @@ export const {
   updateTask,
   removeTask,
   updateTaskState,
+  markTaskRunning,
   selectTask,
   setViewMode,
   setRuns,

@@ -1,4 +1,10 @@
-import { XMarkIcon } from '@heroicons/react/24/outline';
+import {
+  CheckCircleIcon,
+  ChevronRightIcon,
+  MinusCircleIcon,
+  XCircleIcon,
+  XMarkIcon,
+} from '@heroicons/react/24/outline';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSelector } from 'react-redux';
 
@@ -38,11 +44,22 @@ const statusPillColors: Record<TaskStatus, string> = {
   [TaskStatus.Running]: 'bg-blue-500/10 border-blue-500/30 text-blue-600 dark:text-blue-400',
 };
 
-const statusIcons: Record<TaskStatus, { icon: string; color: string }> = {
-  [TaskStatus.Success]: { icon: '✓', color: 'text-green-500' },
-  [TaskStatus.Error]: { icon: '✗', color: 'text-red-500' },
-  [TaskStatus.Skipped]: { icon: '↷', color: 'text-yellow-500' },
-  [TaskStatus.Running]: { icon: '●', color: 'text-blue-500' },
+const RunStatusIcon: React.FC<{ status: TaskStatus }> = ({ status }) => {
+  if (status === TaskStatus.Running) {
+    return (
+      <svg className="h-4 w-4 shrink-0 animate-spin text-blue-500" viewBox="0 0 24 24" fill="none">
+        <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" className="opacity-25" />
+        <path d="M4 12a8 8 0 018-8" stroke="currentColor" strokeWidth="4" strokeLinecap="round" className="opacity-75" />
+      </svg>
+    );
+  }
+  if (status === TaskStatus.Success) {
+    return <CheckCircleIcon className="h-4 w-4 shrink-0 text-green-500" />;
+  }
+  if (status === TaskStatus.Error) {
+    return <XCircleIcon className="h-4 w-4 shrink-0 text-red-500" />;
+  }
+  return <MinusCircleIcon className="h-4 w-4 shrink-0 text-yellow-500" />;
 };
 
 function applyClientFilter(runs: ScheduledTaskRun[], filter: RunFilter): ScheduledTaskRun[] {
@@ -201,44 +218,43 @@ const TaskRunHistory: React.FC<TaskRunHistoryProps> = ({ task, runs }) => {
       ) : (
         <div className="divide-y divide-border/50">
           {displayedRuns.map(run => {
-            const statusInfo = statusIcons[run.status];
+            const canView = Boolean(run.sessionId || run.sessionKey || run.summary || run.error);
             return (
-              <div key={run.id} className="flex items-center justify-between py-2.5 px-1">
-                <div className="flex items-center gap-3 min-w-0">
-                  <span className={`text-sm font-bold ${statusInfo.color}`}>{statusInfo.icon}</span>
-                  <div className="min-w-0">
-                    <span className="text-sm text-foreground">
-                      {formatDateTime(new Date(run.startedAt))}
-                    </span>
-                  </div>
-                </div>
-                <div className="flex items-center gap-3 shrink-0 ml-2">
+              <button
+                key={run.id}
+                type="button"
+                disabled={!canView}
+                onClick={() => {
+                  reportScheduledTaskAction('task_history_view_session', {
+                    source: 'scheduled_task_history',
+                    ...taskAnalyticsParams,
+                    ...getRunAnalyticsParams(run),
+                  });
+                  setViewingRun(run);
+                }}
+                className="flex w-full items-center gap-3 rounded-md px-2 py-2.5 text-left transition-colors enabled:cursor-pointer enabled:hover:bg-surface-raised/60 disabled:cursor-default"
+              >
+                <RunStatusIcon status={run.status} />
+                <span className="shrink-0 text-sm text-foreground">
+                  {formatDateTime(new Date(run.startedAt))}
+                </span>
+                {run.status === 'error' && run.error && (
+                  <span
+                    className="min-w-0 flex-1 truncate text-xs text-red-500"
+                    title={run.error}
+                  >
+                    {run.error}
+                  </span>
+                )}
+                <span className="ml-auto flex shrink-0 items-center gap-2.5">
                   {run.durationMs !== null && (
-                    <span className="text-xs text-secondary">{formatDuration(run.durationMs)}</span>
-                  )}
-                  {run.status === 'error' && run.error && (
-                    <span className="text-xs text-red-500 max-w-[150px] truncate" title={run.error}>
-                      {run.error}
+                    <span className="text-xs tabular-nums text-secondary">
+                      {formatDuration(run.durationMs)}
                     </span>
                   )}
-                  {(run.sessionId || run.sessionKey || run.summary || run.error) && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        reportScheduledTaskAction('task_history_view_session', {
-                          source: 'scheduled_task_history',
-                          ...taskAnalyticsParams,
-                          ...getRunAnalyticsParams(run),
-                        });
-                        setViewingRun(run);
-                      }}
-                      className="text-xs text-primary hover:text-primary-hover transition-colors"
-                    >
-                      {i18nService.t('scheduledTasksViewSession')}
-                    </button>
-                  )}
-                </div>
-              </div>
+                  {canView && <ChevronRightIcon className="h-3.5 w-3.5 text-secondary/50" />}
+                </span>
+              </button>
             );
           })}
         </div>
@@ -256,6 +272,8 @@ const TaskRunHistory: React.FC<TaskRunHistoryProps> = ({ task, runs }) => {
 
       {viewingRun && (
         <RunSessionModal
+          taskName={task.name}
+          runStartedAt={viewingRun.startedAt}
           sessionId={viewingRun.sessionId}
           sessionKey={viewingRun.sessionKey}
           runSummary={viewingRun.summary}

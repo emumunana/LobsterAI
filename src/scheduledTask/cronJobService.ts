@@ -131,6 +131,12 @@ interface CronJobServiceDeps {
   ensureGatewayReady: () => Promise<void>;
 }
 
+/** Delivery routing summary cached per job for synchronous lookups. */
+export interface ScheduledTaskJobDelivery {
+  mode: DeliveryModeType;
+  channel?: string;
+}
+
 type InternalScheduledTaskCandidate = {
   description?: string | null;
   payload?: {
@@ -464,17 +470,28 @@ function extractRunTitle(summary?: string): string | undefined {
 export class CronJobService {
   private readonly getGatewayClient: () => GatewayClientLike | null;
   private readonly ensureGatewayReady: () => Promise<void>;
-  private pollingTimer: ReturnType<typeof setInterval> | null = null;
+  private pollingTimer: ReturnType<typeof setTimeout> | null = null;
   private lastKnownStates: Map<string, string> = new Map();
   private lastKnownRunAtMs: Map<string, number> = new Map();
   private polling = false;
   private firstPollDone = false;
   /** Synchronous jobId → name cache, populated during polling. */
   private jobNameCache: Map<string, string> = new Map();
+  /** Synchronous jobId → delivery routing cache, populated during polling.
+   *  Used by channel session sync to decide whether a cron run needs a local
+   *  "[定时]" session or delivers into an IM conversation instead. */
+  private jobDeliveryCache: Map<string, ScheduledTaskJobDelivery> = new Map();
   /** Job IDs currently running (non-null `runningAtMs`), updated during polling. */
   private runningJobIds: Set<string> = new Set();
+  /** Keep the fast poll cadence until this timestamp (set by manual runs). */
+  private fastPollUntilMs = 0;
 
   private static readonly POLL_INTERVAL_MS = 15_000;
+  /** Faster cadence while a job is running so status changes land quickly. */
+  private static readonly ACTIVE_POLL_INTERVAL_MS = 3_000;
+  /** Fast-poll window after a manual trigger, covering the gap before the
+   *  gateway reports the job as running. */
+  private static readonly MANUAL_RUN_BOOST_MS = 30_000;
 
   constructor(deps: CronJobServiceDeps) {
     this.getGatewayClient = deps.getGatewayClient;
@@ -487,6 +504,24 @@ export class CronJobService {
    */
   getJobNameSync(jobId: string): string | null {
     return this.jobNameCache.get(jobId) ?? null;
+  }
+
+  /**
+   * Look up a job's delivery routing synchronously from the polling cache.
+   * Returns null if the cache hasn't been populated yet.
+   */
+  getJobDeliverySync(jobId: string): ScheduledTaskJobDelivery | null {
+    return this.jobDeliveryCache.get(jobId) ?? null;
+  }
+
+  private cacheJobDelivery(
+    jobId: string,
+    delivery?: { mode: DeliveryModeType; channel?: string } | null,
+  ): void {
+    this.jobDeliveryCache.set(jobId, {
+      mode: delivery?.mode ?? DeliveryMode.None,
+      ...(delivery?.channel ? { channel: delivery.channel } : {}),
+    });
   }
 
   hasRunningJobs(): boolean {
@@ -552,6 +587,7 @@ export class CronJobService {
     });
     const mapped = mapGatewayJob(job);
     this.jobNameCache.set(mapped.id, mapped.name);
+    this.cacheJobDelivery(mapped.id, mapped.delivery);
     console.log('[CronJobService][addJob] created job id:', mapped.id, 'name:', mapped.name);
     return mapped;
   }
@@ -593,6 +629,8 @@ export class CronJobService {
     console.log('[CronJobService][updateJob] final patch:', JSON.stringify(patch, null, 2));
     const job = await client.request<GatewayJob>('cron.update', { id, patch });
     const mapped = mapGatewayJob(job);
+    this.jobNameCache.set(mapped.id, mapped.name);
+    this.cacheJobDelivery(mapped.id, mapped.delivery);
     console.log('[CronJobService][updateJob] updated job id:', mapped.id, 'name:', mapped.name);
     return mapped;
   }
@@ -602,6 +640,8 @@ export class CronJobService {
     await client.request('cron.remove', { id });
     this.lastKnownStates.delete(id);
     this.lastKnownRunAtMs.delete(id);
+    this.jobNameCache.delete(id);
+    this.jobDeliveryCache.delete(id);
   }
 
   async listJobs(): Promise<ScheduledTask[]> {
@@ -636,6 +676,11 @@ export class CronJobService {
   async runJob(id: string): Promise<void> {
     const client = await this.client();
     await client.request('cron.run', { id });
+    // The gateway enqueues the run and returns immediately. Poll right away
+    // and keep a fast cadence briefly so renderers see the running state and
+    // the finished run without waiting for the regular poll interval.
+    this.fastPollUntilMs = Date.now() + CronJobService.MANUAL_RUN_BOOST_MS;
+    void this.pollOnce().finally(() => this.scheduleNextPoll());
   }
 
   async listRuns(
@@ -765,10 +810,7 @@ export class CronJobService {
   startPolling(): void {
     if (this.polling) return;
     this.polling = true;
-    void this.pollOnce();
-    this.pollingTimer = setInterval(() => {
-      void this.pollOnce();
-    }, CronJobService.POLL_INTERVAL_MS);
+    void this.pollOnce().finally(() => this.scheduleNextPoll());
   }
 
   notifyGatewayReady(): void {
@@ -776,20 +818,40 @@ export class CronJobService {
       this.startPolling();
       return;
     }
-    void this.pollOnce(true);
+    void this.pollOnce(true).finally(() => this.scheduleNextPoll());
   }
 
   stopPolling(): void {
     this.polling = false;
     if (this.pollingTimer) {
-      clearInterval(this.pollingTimer);
+      clearTimeout(this.pollingTimer);
       this.pollingTimer = null;
     }
     this.lastKnownStates.clear();
     this.lastKnownRunAtMs.clear();
     this.jobNameCache.clear();
+    this.jobDeliveryCache.clear();
     this.runningJobIds.clear();
+    this.fastPollUntilMs = 0;
     this.firstPollDone = false;
+  }
+
+  /**
+   * (Re-)arm the poll timer with an adaptive delay: fast while a job is
+   * running or a manual run was just triggered, relaxed otherwise.
+   */
+  private scheduleNextPoll(): void {
+    if (!this.polling) return;
+    if (this.pollingTimer) {
+      clearTimeout(this.pollingTimer);
+    }
+    const fast = this.runningJobIds.size > 0 || Date.now() < this.fastPollUntilMs;
+    const delay = fast
+      ? CronJobService.ACTIVE_POLL_INTERVAL_MS
+      : CronJobService.POLL_INTERVAL_MS;
+    this.pollingTimer = setTimeout(() => {
+      void this.pollOnce().finally(() => this.scheduleNextPoll());
+    }, delay);
   }
 
   private async pollOnce(forceFullRefresh = false): Promise<void> {
@@ -807,11 +869,14 @@ export class CronJobService {
       const jobs = Array.isArray(result.jobs) ? result.jobs : [];
       const visibleJobs = jobs.filter(job => !isInternalScheduledTaskJob(job));
 
-      // Refresh jobId → name cache for synchronous lookups (used by session naming).
+      // Refresh jobId → name/delivery caches for synchronous lookups
+      // (used by session naming and cron session routing).
       this.jobNameCache.clear();
+      this.jobDeliveryCache.clear();
       this.runningJobIds.clear();
       for (const job of jobs) {
         this.jobNameCache.set(job.id, job.name);
+        this.cacheJobDelivery(job.id, job.delivery);
         if (job.state.runningAtMs) {
           this.runningJobIds.add(job.id);
         }

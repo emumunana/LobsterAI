@@ -75,6 +75,7 @@ import {
   findReusableCommittedAssistantMessageId,
   findReusableFinalAssistantMessageId,
 } from './assistantMessageReconciliation';
+import { resolveChannelSessionNextStatus } from './channelSessionRunStatus';
 import { AgentLifecyclePhase, type AgentLifecyclePhase as AgentLifecyclePhaseValue } from './constants';
 import {
   buildCoworkContinuityCapsule,
@@ -85,6 +86,7 @@ import {
 } from './coworkContinuityCapsule';
 import { buildCoworkTopKEvidenceBridgeResult } from './coworkTopKEvidence';
 import { buildCoworkWorkspaceRehydrationBridge } from './coworkWorkspaceRehydration';
+import { extractCronDeliveredTarget } from './cronDeliveryTarget';
 import { OpenClawApprovalController } from './openclawApprovalController';
 import {
   applyLocalTimestampsToEntries,
@@ -2122,6 +2124,9 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   private channelPollingTimer: ReturnType<typeof setInterval> | null = null;
 
   private static readonly CHANNEL_POLL_INTERVAL_MS = 10_000;
+  /** Delay before pulling a cron delivery mirror into the mapped conversation,
+   *  giving the gateway time to flush the transcript append. */
+  private static readonly CRON_DELIVERY_SYNC_DELAY_MS = 2_000;
   private static readonly FULL_HISTORY_SYNC_LIMIT = 50;
   private browserPrewarmAttempted = false;
 
@@ -3321,17 +3326,11 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
           ? false
           : null;
     const rawStatus = typeof row.status === 'string' ? row.status.trim().toLowerCase() : '';
-    let nextStatus: CoworkSessionStatus | null = null;
-
-    if (hasActiveRun === true || rawStatus === 'running') {
-      nextStatus = 'running';
-    } else if (rawStatus === 'failed' || rawStatus === 'killed' || rawStatus === 'timeout' || rawStatus === 'error') {
-      nextStatus = 'error';
-    } else if (rawStatus === 'done' || rawStatus === 'completed') {
-      nextStatus = 'completed';
-    } else if (hasActiveRun === false && session.status === 'running') {
-      nextStatus = 'completed';
-    }
+    const nextStatus = resolveChannelSessionNextStatus({
+      hasActiveRun,
+      rawStatus,
+      currentStatus: session.status,
+    });
 
     if (!nextStatus || session.status === nextStatus) return false;
     if (nextStatus !== 'running' && this.activeTurns.has(coworkSessionId)) {
@@ -5722,7 +5721,57 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
 
     if (event.event === 'cron') {
       console.debug('[OpenClawRuntime] received cron event:', JSON.stringify(event));
+      this.scheduleImConversationSyncAfterCronDelivery(event.payload);
     }
+  }
+
+  /**
+   * Cron announce deliveries mirror into the target conversation's gateway
+   * transcript without bumping the session's activity timestamp, so the
+   * active-window incremental poll never picks them up. Pull the mirrored
+   * message into the mapped IM conversation record right after a delivered
+   * run instead.
+   */
+  private scheduleImConversationSyncAfterCronDelivery(payload: unknown): void {
+    const target = extractCronDeliveredTarget(payload);
+    if (!target || !this.channelSessionSync) return;
+    const conversation = this.channelSessionSync.resolveConversationByDeliveryTarget(
+      target.channel,
+      target.to,
+      target.accountId,
+    );
+    if (!conversation) {
+      console.debug(
+        '[ChannelSync] no local conversation mapped for cron delivery target:',
+        target.channel,
+        target.to,
+      );
+      return;
+    }
+    // Delay so the gateway finishes flushing the delivery mirror into the
+    // transcript before we reconcile against chat.history.
+    setTimeout(() => {
+      void this.syncSessionHistoryFromGateway(conversation.sessionId, conversation.sessionKey)
+        .then(() => {
+          // The delivered mirror is assistant-only and message writes
+          // deliberately never advance updated_at (streaming reorder guard),
+          // so surface the fresh delivery in the session list explicitly.
+          this.store.updateSession(conversation.sessionId, {}, { touchUpdatedAt: true });
+          for (const win of BrowserWindow.getAllWindows()) {
+            if (!win.isDestroyed()) {
+              win.webContents.send('cowork:sessions:changed');
+            }
+          }
+          console.log(
+            '[ChannelSync] synced IM conversation after cron delivery.',
+            `Session ${conversation.sessionId}.`,
+            `Channel ${target.channel}.`,
+          );
+        })
+        .catch((error) => {
+          console.warn('[ChannelSync] failed to sync IM conversation after cron delivery:', error);
+        });
+    }, OpenClawRuntimeAdapter.CRON_DELIVERY_SYNC_DELAY_MS);
   }
 
   private handleAgentEvent(payload: unknown, seq?: number): void {
