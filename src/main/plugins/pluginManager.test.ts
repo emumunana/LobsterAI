@@ -14,7 +14,7 @@ vi.mock('electron', () => ({
 
 vi.mock('../libs/nodeRuntime', () => nodeRuntimeMocks);
 
-import { __pluginManagerTestUtils } from './pluginManager';
+import { __pluginManagerTestUtils, isHiddenUserPluginId } from './pluginManager';
 
 afterEach(() => {
   nodeRuntimeMocks.resolveNodePackageCliCommand.mockReset();
@@ -31,4 +31,8 @@ test('resolveNpmCommand delegates to shared npm runtime resolution', () => {
 
   expect(__pluginManagerTestUtils.resolveNpmCommand()).toBe(resolved);
   expect(nodeRuntimeMocks.resolveNodePackageCliCommand).toHaveBeenCalledWith('npm');
+});
+
+test('hides OpenClaw built-in xai provider plugin from user plugin sync', () => {
+  expect(isHiddenUserPluginId('xai')).toBe(true);
 });

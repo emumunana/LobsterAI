@@ -845,6 +845,7 @@ const INTERNAL_PLUGIN_IDS = [
   // Provider plugins auto-injected by OpenClaw runtime — not user-installable.
   // Keep in sync with OpenClawProviderId in src/shared/providers/constants.ts.
   'google',
+  'xai',
   'anthropic',
   'openai',
   'openai-codex',
