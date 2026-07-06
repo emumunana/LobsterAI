@@ -1,4 +1,5 @@
 import { XCircleIcon as XCircleIconSolid } from '@heroicons/react/20/solid';
+import { CheckCircleIcon } from '@heroicons/react/24/outline';
 import React, { useCallback,useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 
@@ -16,7 +17,7 @@ import { McpMarketplaceCategoryInfo,McpRegistryEntry, McpServerConfig, McpServer
 import Modal from '../common/Modal';
 import ErrorMessage from '../ErrorMessage';
 import ConnectorIcon from '../icons/ConnectorIcon';
-import PencilIcon from '../icons/PencilIcon';
+import EditIcon from '../icons/EditIcon';
 import SearchIcon from '../icons/SearchIcon';
 import TrashIcon from '../icons/TrashIcon';
 import {
@@ -691,6 +692,46 @@ const McpManager: React.FC = () => {
     handleCloseForm();
   };
 
+  const handleImportJsonServers = async (
+    list: McpServerFormData[],
+  ): Promise<{ success: boolean; error?: string }> => {
+    setActionError('');
+    reportMcpAction('json_import_submit', {
+      source: 'mcp_manager',
+      activeTab,
+      serverCount: list.length,
+    });
+    let latestServers: McpServerConfig[] | undefined;
+    for (const data of list) {
+      const result = await mcpService.createServer(data);
+      if (!result.success) {
+        // Keep the servers created before the failure visible in the UI.
+        if (latestServers) dispatch(setMcpServers(latestServers));
+        reportMcpAction('json_import_failed', {
+          source: 'mcp_manager',
+          activeTab,
+          result: 'failed',
+          errorCode: 'json_import_failed',
+          serverCount: list.length,
+        });
+        return {
+          success: false,
+          error: `${data.name}: ${result.error || i18nService.t('mcpCreateFailed')}`,
+        };
+      }
+      latestServers = result.servers ?? latestServers;
+    }
+    if (latestServers) dispatch(setMcpServers(latestServers));
+    reportMcpAction('json_import_success', {
+      source: 'mcp_manager',
+      activeTab,
+      result: 'success',
+      serverCount: list.length,
+    });
+    handleCloseForm();
+    return { success: true };
+  };
+
   const handleOpenCreateForm = () => {
     reportMcpAction('custom_create_open', {
       source: 'mcp_manager',
@@ -718,14 +759,14 @@ const McpManager: React.FC = () => {
   );
 
   const tabClass = (tab: McpTab) =>
-    `px-4 py-2 text-sm font-medium transition-colors relative ${
+    `relative px-2.5 pb-2.5 pt-0.5 text-[13px] font-semibold transition-colors ${
       activeTab === tab
         ? 'text-foreground'
-        : 'text-secondary hover:hover:text-foreground'
+        : 'text-secondary hover:text-foreground'
     }`;
 
   const tabIndicatorClass = (tab: McpTab) =>
-    `absolute bottom-0 left-0 right-0 h-0.5 rounded-full transition-colors ${
+    `absolute bottom-[-1px] left-0 right-0 h-0.5 rounded-full transition-colors ${
       activeTab === tab ? 'bg-primary' : 'bg-transparent'
     }`;
 
@@ -739,7 +780,7 @@ const McpManager: React.FC = () => {
       )}
 
       {/* Sticky toolbar: Description + Search + Tabs + Category pills */}
-      <div className="sticky top-0 z-10 bg-claude-bg dark:bg-claude-darkBg pb-4 space-y-4 shadow-sm">
+      <div className="sticky top-0 z-10 space-y-4 bg-background pb-4">
         {/* Description */}
         <p className="text-sm text-secondary">
           {i18nService.t('mcpDescription')}
@@ -797,7 +838,7 @@ const McpManager: React.FC = () => {
           >
             {i18nService.t('mcpInstalled')}
             {installedItems.length > 0 && (
-              <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full bg-surface-raised">
+              <span className="ml-1.5 rounded-full bg-surface-raised px-1.5 py-0.5 text-[10px] font-medium text-secondary">
                 {installedItems.length}
               </span>
             )}
@@ -817,7 +858,7 @@ const McpManager: React.FC = () => {
           >
             {i18nService.t('mcpMarketplace')}
             {marketplaceCount > 0 && (
-              <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full bg-surface-raised">
+              <span className="ml-1.5 rounded-full bg-surface-raised px-1.5 py-0.5 text-[10px] font-medium text-secondary">
                 {marketplaceCount}
               </span>
             )}
@@ -837,7 +878,7 @@ const McpManager: React.FC = () => {
           >
             {i18nService.t('mcpCustom')}
             {customCount > 0 && (
-              <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full bg-surface-raised">
+              <span className="ml-1.5 rounded-full bg-surface-raised px-1.5 py-0.5 text-[10px] font-medium text-secondary">
                 {customCount}
               </span>
             )}
@@ -862,10 +903,10 @@ const McpManager: React.FC = () => {
                   });
                   setActiveCategory(cat.id);
                 }}
-                className={`px-2.5 py-1 text-xs rounded-lg transition-colors ${
+                className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
                   activeCategory === cat.id
                     ? 'bg-primary text-white'
-                    : 'bg-surface text-secondary hover:bg-surface-raised border border-border'
+                    : 'bg-surface-raised text-secondary hover:text-foreground'
                 }`}
               >
                 {(i18nService.getLanguage() === 'zh' ? cat.name_zh : cat.name_en) || i18nService.t(cat.key)}
@@ -878,9 +919,9 @@ const McpManager: React.FC = () => {
       <div>
       {/* ── Tab: Installed ──────────────────────────────── */}
       {activeTab === 'installed' && (
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-3">
           {filteredInstalled.length === 0 ? (
-            <div className="col-span-2 text-center py-12 text-sm text-secondary">
+            <div className="col-span-full text-center py-12 text-sm text-secondary">
               {i18nService.t('mcpNoInstalledServers')}
             </div>
           ) : (
@@ -894,12 +935,12 @@ const McpManager: React.FC = () => {
                 return (
                   <div
                     key={item.id}
-                    className="rounded-xl border border-border bg-surface p-3 transition-colors hover:border-primary"
+                    className="flex flex-col rounded-xl border border-border bg-surface p-3 shadow-subtle transition-all hover:border-primary/50 hover:shadow-card"
                   >
                     <div className="flex items-start justify-between mb-2">
                       <div className="flex items-center gap-2 min-w-0">
-                        <div className="w-7 h-7 rounded-lg bg-surface flex items-center justify-center flex-shrink-0">
-                          <ConnectorIcon className="h-4 w-4 text-secondary" />
+                        <div className="w-7 h-7 rounded-lg bg-primary-muted flex items-center justify-center flex-shrink-0">
+                          <ConnectorIcon className="h-4 w-4 text-primary" />
                         </div>
                         <span className="text-sm font-medium text-foreground truncate">
                           {groupName}
@@ -940,7 +981,7 @@ const McpManager: React.FC = () => {
 
                     <ClampedText text={groupDescription} className="text-xs text-secondary mb-2" />
 
-                    <div className="flex items-center gap-2 text-[10px] text-secondary min-w-0">
+                    <div className="mt-auto flex items-center gap-2 text-[11px] text-secondary min-w-0">
                       {groupTransportType && (
                         <span className={`shrink-0 px-1.5 py-0.5 rounded font-medium ${TRANSPORT_BADGE_COLORS[groupTransportType] || ''}`}>
                           {groupTransportType}
@@ -966,12 +1007,12 @@ const McpManager: React.FC = () => {
               return (
                 <div
                   key={server.id}
-                  className="rounded-xl border border-border bg-surface p-3 transition-colors hover:border-primary"
+                  className="flex flex-col rounded-xl border border-border bg-surface p-3 shadow-subtle transition-all hover:border-primary/50 hover:shadow-card"
                 >
                   <div className="flex items-start justify-between mb-2">
                     <div className="flex items-center gap-2 min-w-0">
-                      <div className="w-7 h-7 rounded-lg bg-surface flex items-center justify-center flex-shrink-0">
-                        <ConnectorIcon className="h-4 w-4 text-secondary" />
+                      <div className="w-7 h-7 rounded-lg bg-primary-muted flex items-center justify-center flex-shrink-0">
+                        <ConnectorIcon className="h-4 w-4 text-primary" />
                       </div>
                       <span className="text-sm font-medium text-foreground truncate">
                         {server.name}
@@ -984,7 +1025,7 @@ const McpManager: React.FC = () => {
                         className="p-1 rounded-lg text-secondary hover:text-primary dark:hover:text-primary transition-colors"
                         title={i18nService.t('editMcpServer')}
                       >
-                        <PencilIcon className="h-3.5 w-3.5" />
+                        <EditIcon className="h-3.5 w-3.5" />
                       </button>
                       <button
                         type="button"
@@ -1011,7 +1052,7 @@ const McpManager: React.FC = () => {
 
                   <ClampedText text={installedDescription} className="text-xs text-secondary mb-2" />
 
-                  <div className="flex items-center gap-2 text-[10px] text-secondary min-w-0">
+                  <div className="mt-auto flex items-center gap-2 text-[11px] text-secondary min-w-0">
                     <span className={`shrink-0 px-1.5 py-0.5 rounded font-medium ${TRANSPORT_BADGE_COLORS[server.transportType] || ''}`}>
                       {server.transportType}
                     </span>
@@ -1063,21 +1104,21 @@ const McpManager: React.FC = () => {
       {/* ── Tab: Marketplace ────────────────────────────── */}
       {activeTab === 'marketplace' && (
         <div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-3">
             {filteredMarketplace.length === 0 ? (
-              <div className="col-span-2 text-center py-12 text-sm text-secondary">
+              <div className="col-span-full text-center py-12 text-sm text-secondary">
                 {i18nService.t('noMcpServersAvailable')}
               </div>
             ) : (
               filteredMarketplace.map((entry) => (
                 <div
                   key={entry.id}
-                  className="rounded-xl border border-border bg-surface p-3 transition-colors hover:border-primary"
+                  className="flex flex-col rounded-xl border border-border bg-surface p-3 shadow-subtle transition-all hover:border-primary/50 hover:shadow-card"
                 >
                   <div className="flex items-start justify-between mb-2">
                     <div className="flex items-center gap-2 min-w-0">
-                      <div className="w-7 h-7 rounded-lg bg-surface flex items-center justify-center flex-shrink-0">
-                        <ConnectorIcon className="h-4 w-4 text-secondary" />
+                      <div className="w-7 h-7 rounded-lg bg-primary-muted flex items-center justify-center flex-shrink-0">
+                        <ConnectorIcon className="h-4 w-4 text-primary" />
                       </div>
                       <span className="text-sm font-medium text-foreground truncate">
                         {entry.name}
@@ -1085,7 +1126,8 @@ const McpManager: React.FC = () => {
                     </div>
                     <div className="flex items-center gap-1.5 flex-shrink-0">
                       {installedRegistryIds.has(entry.id) ? (
-                        <span className="px-2.5 py-1 text-xs rounded-lg bg-surface text-secondary">
+                        <span className="inline-flex items-center gap-1 px-2 py-1 text-[10px] font-medium rounded-lg text-green-600 dark:text-green-400 bg-green-500/10">
+                          <CheckCircleIcon className="h-3.5 w-3.5" />
                           {isQichachaRegistryEntry(entry)
                             ? i18nService.t('mcpAuthorized')
                             : i18nService.t('mcpInstalled')}
@@ -1115,7 +1157,7 @@ const McpManager: React.FC = () => {
 
                   <ClampedText text={getRegistryEntryDescription(entry)} className="text-xs text-secondary mb-2" />
 
-                  <div className="flex items-center gap-2 text-[10px] text-secondary min-w-0">
+                  <div className="mt-auto flex items-center gap-2 text-[11px] text-secondary min-w-0">
                     <span className={`shrink-0 px-1.5 py-0.5 rounded font-medium ${TRANSPORT_BADGE_COLORS[entry.transportType] || ''}`}>
                       {entry.transportType}
                     </span>
@@ -1140,27 +1182,19 @@ const McpManager: React.FC = () => {
       {/* ── Tab: Custom ─────────────────────────────────── */}
       {activeTab === 'custom' && (
         <div className="space-y-6">
-          {/* Custom servers grid (add button + server cards) */}
-          <div className="grid grid-cols-2 gap-3">
-            {/* Add custom server card */}
-            <button
-              type="button"
-              onClick={handleOpenCreateForm}
-              className="rounded-xl border-2 border-dashed border-border text-secondary hover:border-primary hover:text-primary dark:hover:border-primary dark:hover:text-primary transition-colors flex items-center justify-center min-h-[120px] text-sm"
-            >
-              + {i18nService.t('addMcpServer')}
-            </button>
+          {/* Custom servers grid (server cards + trailing add button) */}
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-3">
             {filteredCustom.map((server) => {
               const launchStatusLabel = getLaunchStatusLabel(server);
               return (
                 <div
                   key={server.id}
-                  className="rounded-xl border border-border bg-surface p-3 transition-colors hover:border-primary"
+                  className="flex flex-col rounded-xl border border-border bg-surface p-3 shadow-subtle transition-all hover:border-primary/50 hover:shadow-card"
                 >
                   <div className="flex items-start justify-between mb-2">
                     <div className="flex items-center gap-2 min-w-0">
-                      <div className="w-7 h-7 rounded-lg bg-surface flex items-center justify-center flex-shrink-0">
-                        <ConnectorIcon className="h-4 w-4 text-secondary" />
+                      <div className="w-7 h-7 rounded-lg bg-primary-muted flex items-center justify-center flex-shrink-0">
+                        <ConnectorIcon className="h-4 w-4 text-primary" />
                       </div>
                       <span className="text-sm font-medium text-foreground truncate">
                         {server.name}
@@ -1173,7 +1207,7 @@ const McpManager: React.FC = () => {
                         className="p-1 rounded-lg text-secondary hover:text-primary dark:hover:text-primary transition-colors"
                         title={i18nService.t('editMcpServer')}
                       >
-                        <PencilIcon className="h-3.5 w-3.5" />
+                        <EditIcon className="h-3.5 w-3.5" />
                       </button>
                       <button
                         type="button"
@@ -1200,7 +1234,7 @@ const McpManager: React.FC = () => {
 
                   <ClampedText text={server.description || getTransportSummary(server)} className="text-xs text-secondary mb-2" />
 
-                  <div className="flex items-center gap-2 text-[10px] text-secondary min-w-0">
+                  <div className="mt-auto flex items-center gap-2 text-[11px] text-secondary min-w-0">
                     <span className={`shrink-0 px-1.5 py-0.5 rounded font-medium ${TRANSPORT_BADGE_COLORS[server.transportType] || ''}`}>
                       {server.transportType}
                     </span>
@@ -1237,6 +1271,14 @@ const McpManager: React.FC = () => {
                 </div>
               );
             })}
+            {/* Add custom server card (kept last so existing servers lead) */}
+            <button
+              type="button"
+              onClick={handleOpenCreateForm}
+              className="flex min-h-[120px] items-center justify-center gap-1 rounded-xl border border-dashed border-border text-sm text-secondary transition-colors hover:border-primary/50 hover:bg-primary-muted/30 hover:text-primary"
+            >
+              + {i18nService.t('addMcpServer')}
+            </button>
           </div>
         </div>
       )}
@@ -1289,6 +1331,7 @@ const McpManager: React.FC = () => {
         existingNames={existingNames}
         onClose={handleCloseForm}
         onSave={handleSaveForm}
+        onImportJson={handleImportJsonServers}
       />
     </div>
   );
