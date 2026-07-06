@@ -1,6 +1,7 @@
 import {
   ArrowsPointingInIcon,
   ArrowsPointingOutIcon,
+  BellSlashIcon,
   CheckIcon,
 } from '@heroicons/react/24/outline';
 import { PlatformRegistry } from '@shared/platform';
@@ -1264,9 +1265,11 @@ const TaskForm: React.FC<TaskFormProps> = ({
               className={`${inputClass} w-full flex items-center justify-between cursor-pointer`}
             >
               <span className="flex items-center gap-2 truncate">
-                {selectedLogo && (
+                {form.notifyChannel === DEFAULT_FORM_STATE.notifyChannel ? (
+                  <BellSlashIcon className="w-5 h-5 shrink-0 text-secondary" />
+                ) : selectedLogo ? (
                   <img src={selectedLogo} alt="" className="w-5 h-5 object-contain rounded" />
-                )}
+                ) : null}
                 <span className="truncate">
                   {(() => {
                     const selected = channelOptions.find(o =>
@@ -1312,7 +1315,7 @@ const TaskForm: React.FC<TaskFormProps> = ({
                       setChannelDropdownOpen(false);
                     }}
                   >
-                    <span className="w-5 h-5 shrink-0" />
+                    <BellSlashIcon className="w-5 h-5 shrink-0 text-secondary" />
                     <span className="min-w-0 flex-1 truncate text-[13px] font-normal leading-5">
                       {i18nService.t('scheduledTasksFormNotifyChannelNone')}
                     </span>
