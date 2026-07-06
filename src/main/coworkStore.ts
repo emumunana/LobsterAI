@@ -544,6 +544,7 @@ export interface CoworkConfig {
   memoryGuardLevel: CoworkMemoryGuardLevel;
   memoryUserMemoriesMaxItems: number;
   skipMissedJobs: boolean;
+  openClawHeartbeatEnabled: boolean;
   embeddingEnabled: boolean;
   embeddingProvider: string;
   embeddingModel: string;
@@ -568,6 +569,7 @@ CoworkConfig,
   | 'memoryGuardLevel'
   | 'memoryUserMemoriesMaxItems'
   | 'skipMissedJobs'
+  | 'openClawHeartbeatEnabled'
   | 'embeddingEnabled'
   | 'embeddingProvider'
   | 'embeddingModel'
@@ -1999,6 +2001,7 @@ export class CoworkStore {
       'memoryGuardLevel',
       'memoryUserMemoriesMaxItems',
       'skipMissedJobs',
+      'openClawHeartbeatEnabled',
       'embeddingEnabled',
       'embeddingProvider',
       'embeddingModel',
@@ -2036,6 +2039,7 @@ export class CoworkStore {
         Number(cfg.get('memoryUserMemoriesMaxItems')),
       ),
       skipMissedJobs: parseBooleanConfig(cfg.get('skipMissedJobs'), true),
+      openClawHeartbeatEnabled: parseBooleanConfig(cfg.get('openClawHeartbeatEnabled'), true),
       embeddingEnabled: parseBooleanConfig(cfg.get('embeddingEnabled'), DEFAULT_EMBEDDING_ENABLED),
       embeddingProvider: cfg.get('embeddingProvider') || DEFAULT_EMBEDDING_PROVIDER,
       embeddingModel: cfg.get('embeddingModel') || DEFAULT_EMBEDDING_MODEL,
@@ -2079,6 +2083,9 @@ export class CoworkStore {
     }
     if (config.skipMissedJobs !== undefined) {
       this.upsertConfig('skipMissedJobs', config.skipMissedJobs ? '1' : '0', now);
+    }
+    if (config.openClawHeartbeatEnabled !== undefined) {
+      this.upsertConfig('openClawHeartbeatEnabled', config.openClawHeartbeatEnabled ? '1' : '0', now);
     }
     if (config.embeddingEnabled !== undefined) {
       this.upsertConfig('embeddingEnabled', config.embeddingEnabled ? '1' : '0', now);

@@ -792,6 +792,10 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkAgentEngineOpenClaw: 'OpenClaw（默认）',
     coworkAgentEngineOpenClawHint: '个人 AI 助理',
     openClawRuntimeStatusTitle: '运行状态',
+    openClawBackgroundRuntimeTitle: '后台运行',
+    openClawHeartbeatEnabled: '启用 OpenClaw 心跳',
+    openClawHeartbeatEnabledDescription:
+      '开启后 OpenClaw 会每 1 小时自动检查一次后台提醒和任务状态。关闭后可减少空闲时的 token 消耗，但提醒、任务完成通知等后台更新可能延迟或无法主动触达。',
     openClawGatewayAddress: '网关地址',
     openClawStartupProgressLabel: '启动进度',
     openClawStatusBadgeReady: '已就绪',
@@ -3521,6 +3525,10 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkAgentEngineOpenClaw: 'OpenClaw (Default)',
     coworkAgentEngineOpenClawHint: 'Personal AI assistant',
     openClawRuntimeStatusTitle: 'Runtime status',
+    openClawBackgroundRuntimeTitle: 'Background runtime',
+    openClawHeartbeatEnabled: 'Enable OpenClaw heartbeat',
+    openClawHeartbeatEnabledDescription:
+      'When enabled, OpenClaw checks background reminders and task status once every 1 hour. Turning it off can reduce idle token usage, but reminders, task completion notifications, and other background updates may be delayed or may not be delivered proactively.',
     openClawGatewayAddress: 'Gateway address',
     openClawStartupProgressLabel: 'Startup progress',
     openClawStatusBadgeReady: 'Ready',

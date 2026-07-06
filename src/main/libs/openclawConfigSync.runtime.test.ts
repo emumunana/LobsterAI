@@ -231,6 +231,50 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(config.agents.defaults.mediaMaxMb).toBe(30);
   });
 
+  test('enables optimized OpenClaw heartbeat by default', async () => {
+    const sync = await createSync();
+
+    const result = sync.sync('heartbeat-enabled-default');
+    expect(result.ok).toBe(true);
+
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.agents.defaults.heartbeat).toEqual({
+      every: '1h',
+      target: 'none',
+      lightContext: true,
+      isolatedSession: true,
+    });
+  });
+
+  test('writes disabled OpenClaw heartbeat cadence when user disables heartbeat', async () => {
+    const sync = await createSync({
+      getCoworkConfig: () => ({
+        workingDirectory: tmpDir,
+        systemPrompt: '',
+        executionMode: 'local',
+        agentEngine: 'openclaw',
+        memoryEnabled: false,
+        memoryImplicitUpdateEnabled: false,
+        memoryLlmJudgeEnabled: false,
+        memoryGuardLevel: 'balanced',
+        memoryUserMemoriesMaxItems: 100,
+        skipMissedJobs: false,
+        openClawHeartbeatEnabled: false,
+      }),
+    });
+
+    const result = sync.sync('heartbeat-disabled');
+    expect(result.ok).toBe(true);
+
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.agents.defaults.heartbeat).toEqual({
+      every: '0m',
+      target: 'none',
+      lightContext: true,
+      isolatedSession: true,
+    });
+  });
+
   test('writes model provider env-proxy transport when system proxy is enabled', async () => {
     const { setSystemProxyEnabled } = await import('./systemProxy');
     setSystemProxyEnabled(true);

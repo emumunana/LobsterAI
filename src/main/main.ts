@@ -7757,6 +7757,7 @@ if (!gotTheLock) {
     memoryGuardLevel?: 'strict' | 'standard' | 'relaxed';
     memoryUserMemoriesMaxItems?: number;
     skipMissedJobs?: boolean;
+    openClawHeartbeatEnabled?: boolean;
     embeddingEnabled?: boolean;
     embeddingProvider?: string;
     embeddingModel?: string;
@@ -7797,6 +7798,9 @@ if (!gotTheLock) {
       const normalizedSkipMissedJobs = typeof config.skipMissedJobs === 'boolean'
         ? config.skipMissedJobs
         : undefined;
+      const normalizedOpenClawHeartbeatEnabled = typeof config.openClawHeartbeatEnabled === 'boolean'
+        ? config.openClawHeartbeatEnabled
+        : undefined;
       const normalizedEmbedding = normalizeEmbeddingConfig(config);
       const normalizedConfig: Parameters<CoworkStore['setConfig']>[0] = {
         ...config,
@@ -7808,6 +7812,7 @@ if (!gotTheLock) {
         memoryGuardLevel: normalizedMemoryGuardLevel,
         memoryUserMemoriesMaxItems: normalizedMemoryUserMemoriesMaxItems,
         skipMissedJobs: normalizedSkipMissedJobs,
+        openClawHeartbeatEnabled: normalizedOpenClawHeartbeatEnabled,
         ...normalizedEmbedding,
       };
       const previousConfig = getCoworkStore().getConfig();

@@ -87,6 +87,8 @@ const mapExecutionModeToSandboxMode = (
  * Also used by the runtime adapter's client-side timeout watchdog.
  */
 export const OPENCLAW_AGENT_TIMEOUT_SECONDS = 3600;
+export const OPENCLAW_HEARTBEAT_EVERY_ENABLED = '1h';
+export const OPENCLAW_HEARTBEAT_EVERY_DISABLED = '0m';
 const DINGTALK_OPENCLAW_CHANNEL = 'dingtalk-connector';
 export const OPENCLAW_BINDING_ANY_ACCOUNT_ID = '*';
 const OPENCLAW_DEFAULT_MODEL_MAX_TOKENS = 8192;
@@ -1853,7 +1855,9 @@ loopDetection: MANAGED_TOOL_LOOP_DETECTION,
             },
           } : {}),
           heartbeat: {
-            every: '1h',
+            every: coworkConfig.openClawHeartbeatEnabled === false
+              ? OPENCLAW_HEARTBEAT_EVERY_DISABLED
+              : OPENCLAW_HEARTBEAT_EVERY_ENABLED,
             target: 'none',
             lightContext: true,
             isolatedSession: true,

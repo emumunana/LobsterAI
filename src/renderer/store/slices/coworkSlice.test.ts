@@ -43,6 +43,7 @@ test('defaults hidden OpenClaw session policy to thirty days', () => {
     keepAlive: '30d',
   });
   expect(state.config.skipMissedJobs).toBe(true);
+  expect(state.config.openClawHeartbeatEnabled).toBe(true);
 });
 
 test('setConfig preserves loaded OpenClaw session policy', () => {
@@ -57,6 +58,7 @@ test('setConfig preserves loaded OpenClaw session policy', () => {
     memoryGuardLevel: 'strict',
     memoryUserMemoriesMaxItems: 12,
     skipMissedJobs: false,
+    openClawHeartbeatEnabled: false,
     embeddingEnabled: false,
     embeddingProvider: 'openai',
     embeddingModel: '',
@@ -74,6 +76,7 @@ test('setConfig preserves loaded OpenClaw session policy', () => {
   }));
 
   expect(state.config.openClawSessionPolicy.keepAlive).toBe('365d');
+  expect(state.config.openClawHeartbeatEnabled).toBe(false);
 });
 
 test('updateCurrentSessionModelOverride only patches the active session', () => {

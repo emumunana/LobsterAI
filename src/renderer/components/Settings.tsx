@@ -1654,6 +1654,7 @@ const Settings: React.FC<SettingsProps> = ({
   const [coworkMemoryEnabled, setCoworkMemoryEnabled] = useState<boolean>(coworkConfig.memoryEnabled ?? true);
   const [coworkMemoryLlmJudgeEnabled, setCoworkMemoryLlmJudgeEnabled] = useState<boolean>(coworkConfig.memoryLlmJudgeEnabled ?? false);
   const [skipMissedJobs, setSkipMissedJobs] = useState<boolean>(coworkConfig.skipMissedJobs ?? true);
+  const [openClawHeartbeatEnabled, setOpenClawHeartbeatEnabled] = useState<boolean>(coworkConfig.openClawHeartbeatEnabled ?? true);
   const [embeddingEnabled, setEmbeddingEnabled] = useState<boolean>(coworkConfig.embeddingEnabled ?? false);
   const [embeddingProvider, setEmbeddingProvider] = useState<string>(coworkConfig.embeddingProvider ?? 'openai');
   const [embeddingModel, setEmbeddingModel] = useState<string>(coworkConfig.embeddingModel ?? '');
@@ -1691,6 +1692,7 @@ const Settings: React.FC<SettingsProps> = ({
     setCoworkMemoryEnabled(coworkConfig.memoryEnabled ?? true);
     setCoworkMemoryLlmJudgeEnabled(coworkConfig.memoryLlmJudgeEnabled ?? false);
     setSkipMissedJobs(coworkConfig.skipMissedJobs ?? true);
+    setOpenClawHeartbeatEnabled(coworkConfig.openClawHeartbeatEnabled ?? true);
     setEmbeddingEnabled(coworkConfig.embeddingEnabled ?? false);
     setEmbeddingProvider(coworkConfig.embeddingProvider ?? 'openai');
     setEmbeddingModel(coworkConfig.embeddingModel ?? '');
@@ -1709,6 +1711,7 @@ const Settings: React.FC<SettingsProps> = ({
     coworkConfig.memoryLlmJudgeEnabled,
     coworkConfig.openClawSessionPolicy?.keepAlive,
     coworkConfig.skipMissedJobs,
+    coworkConfig.openClawHeartbeatEnabled,
     coworkConfig.embeddingEnabled,
     coworkConfig.embeddingProvider,
     coworkConfig.embeddingModel,
@@ -2635,6 +2638,7 @@ const Settings: React.FC<SettingsProps> = ({
     || coworkMemoryEnabled !== coworkConfig.memoryEnabled
     || coworkMemoryLlmJudgeEnabled !== coworkConfig.memoryLlmJudgeEnabled
     || skipMissedJobs !== (coworkConfig.skipMissedJobs ?? true)
+    || openClawHeartbeatEnabled !== (coworkConfig.openClawHeartbeatEnabled ?? true)
     || openClawSessionKeepAlive !== (coworkConfig.openClawSessionPolicy?.keepAlive || OpenClawSessionKeepAliveValues.ThirtyDays)
     || embeddingEnabled !== (coworkConfig.embeddingEnabled ?? false)
     || embeddingProvider !== (coworkConfig.embeddingProvider ?? 'openai')
@@ -3154,6 +3158,7 @@ const Settings: React.FC<SettingsProps> = ({
         ? normalizeProvidersForSettingsSave(previousConfig.providers as ProvidersConfig)
         : normalizedProviders;
       const previousSkipMissedJobs = coworkConfig.skipMissedJobs ?? true;
+      const previousOpenClawHeartbeatEnabled = coworkConfig.openClawHeartbeatEnabled ?? true;
       const previousAgentEngine = coworkConfig.agentEngine || 'openclaw';
       const previousOpenClawSessionKeepAlive = coworkConfig.openClawSessionPolicy?.keepAlive
         || OpenClawSessionKeepAliveValues.ThirtyDays;
@@ -3269,6 +3274,7 @@ const Settings: React.FC<SettingsProps> = ({
           memoryEnabled: coworkMemoryEnabled,
           memoryLlmJudgeEnabled: coworkMemoryLlmJudgeEnabled,
           skipMissedJobs,
+          openClawHeartbeatEnabled,
           embeddingEnabled,
           embeddingProvider,
           embeddingModel,
@@ -3355,6 +3361,13 @@ const Settings: React.FC<SettingsProps> = ({
         }
         if (previousAgentEngine !== coworkAgentEngine) {
           reportAgentEngineSettingChanged('agentEngine', coworkAgentEngine, previousAgentEngine);
+        }
+        if (previousOpenClawHeartbeatEnabled !== openClawHeartbeatEnabled) {
+          reportAgentEngineSettingChanged(
+            'openClawHeartbeatEnabled',
+            openClawHeartbeatEnabled,
+            previousOpenClawHeartbeatEnabled,
+          );
         }
         if (previousOpenClawSessionKeepAlive !== openClawSessionKeepAlive) {
           reportAgentEngineSettingChanged(
@@ -4634,6 +4647,23 @@ const Settings: React.FC<SettingsProps> = ({
                         )}
                       </div>
                     </div>
+                  </div>
+                </section>
+
+                <section className="space-y-3">
+                  <h4 className="text-sm font-medium text-foreground">
+                    {i18nService.t('openClawBackgroundRuntimeTitle')}
+                  </h4>
+
+                  <div className="rounded-xl border border-border bg-surface p-4">
+                    <SettingsToggleRow
+                      title={i18nService.t('openClawHeartbeatEnabled')}
+                      description={i18nService.t('openClawHeartbeatEnabledDescription')}
+                      checked={openClawHeartbeatEnabled}
+                      onToggle={() => {
+                        setOpenClawHeartbeatEnabled((prev) => !prev);
+                      }}
+                    />
                   </div>
                 </section>
 

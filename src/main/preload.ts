@@ -458,6 +458,7 @@ contextBridge.exposeInMainWorld('electron', {
       memoryGuardLevel?: 'strict' | 'standard' | 'relaxed';
       memoryUserMemoriesMaxItems?: number;
       skipMissedJobs?: boolean;
+      openClawHeartbeatEnabled?: boolean;
       embeddingEnabled?: boolean;
       embeddingProvider?: string;
       embeddingModel?: string;
