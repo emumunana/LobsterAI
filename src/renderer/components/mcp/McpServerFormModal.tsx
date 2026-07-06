@@ -184,11 +184,11 @@ const McpServerFormModal: React.FC<McpServerFormModalProps> = ({
 
     if (transportType === 'stdio') {
       data.command = command.trim();
-      if (args.length > 0) data.args = args;
-      if (Object.keys(env).length > 0) data.env = env;
+      data.args = args;
+      data.env = env;
     } else {
       data.url = normalizedUrl;
-      if (Object.keys(headers).length > 0) data.headers = headers;
+      data.headers = headers;
     }
 
     // Attach registry metadata if installing from registry

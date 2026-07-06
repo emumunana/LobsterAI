@@ -2124,4 +2124,33 @@ describe('OpenClawConfigSync runtime config output', () => {
     expect(result.changedTopLevelKeys).toContain('mcp');
     expect(result.restartImpact).toBe(OpenClawConfigImpact.Restart);
   });
+
+  test('writes all remote MCP headers to openclaw config', async () => {
+    const sync = await createSync({
+      getResolvedMcpServers: () => [{
+        name: 'Remote MCP',
+        transportType: 'http',
+        url: 'https://mcp.example.com/stream',
+        headers: {
+          Authorization: 'Bearer test-token',
+          'X-Tenant-Id': 'tenant-123',
+          'X-Client-Id': 'client-456',
+        },
+      }],
+    });
+
+    const result = sync.sync('mcp-server-updated');
+
+    expect(result.ok).toBe(true);
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(config.mcp.servers['Remote MCP']).toMatchObject({
+      url: 'https://mcp.example.com/stream',
+      transport: 'streamable-http',
+      headers: {
+        authorization: 'Bearer test-token',
+        'x-tenant-id': 'tenant-123',
+        'x-client-id': 'client-456',
+      },
+    });
+  });
 });
