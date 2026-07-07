@@ -138,6 +138,18 @@ describe('conversationOptionMatchesValue', () => {
     expect(conversationOptionMatchesValue('telegram', '', '123')).toBe(false);
     expect(conversationOptionMatchesValue('telegram', 'cebef798:direct:123', '')).toBe(false);
   });
+
+  // Regression: a bot present in both a group and a private chat must let the
+  // delivery dropdown highlight/select the group without confusing it with the
+  // DM sibling (previously the target was auto-resolved and not user-selectable).
+  test('disambiguates a group target from a DM sibling on the same bot', () => {
+    const groupId = 'bot1:group:12345@popo.netease.com';
+    const dmId = 'bot1:direct:67890@popo.netease.com';
+    expect(conversationOptionMatchesValue('popo', groupId, groupId)).toBe(true);
+    expect(conversationOptionMatchesValue('popo', groupId, '12345@popo.netease.com')).toBe(true);
+    expect(conversationOptionMatchesValue('popo', groupId, dmId)).toBe(false);
+    expect(conversationOptionMatchesValue('popo', dmId, groupId)).toBe(false);
+  });
 });
 
 describe('formatConversationOptionLabel', () => {

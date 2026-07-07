@@ -2584,6 +2584,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     scheduledTasksSessionKey: '会话键',
     scheduledTasksFormNotifyConversationLoading: '加载会话列表...',
     scheduledTasksFormNotifyResolvedTo: '将通知到：',
+    scheduledTasksFormNotifySelectConversation: '选择会话',
+    scheduledTasksFormNotifySelectConversationHint: '选择要推送执行结果的会话（群聊或私聊）',
     scheduledTasksFormNotifyNoConversationHint: '该机器人还没有会话，请先在 IM 中给它发一条消息',
     scheduledTasksFormValidationNotifyTargetMissing:
       '该机器人还没有会话，无法确定通知对象。请先在 IM 中给它发一条消息，或暂时选择"不通知"',
@@ -5443,6 +5445,9 @@ const translations: Record<LanguageType, Record<string, string>> = {
     scheduledTasksSessionKey: 'Session Key',
     scheduledTasksFormNotifyConversationLoading: 'Loading conversations...',
     scheduledTasksFormNotifyResolvedTo: 'Will notify: ',
+    scheduledTasksFormNotifySelectConversation: 'Select a conversation',
+    scheduledTasksFormNotifySelectConversationHint:
+      'Choose which conversation (group or DM) receives the result',
     scheduledTasksFormNotifyNoConversationHint:
       'This bot has no conversations yet. Send it a message in the IM first.',
     scheduledTasksFormValidationNotifyTargetMissing:
