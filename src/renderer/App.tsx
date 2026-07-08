@@ -28,7 +28,7 @@ import Toast from './components/Toast';
 import AppUpdateBadge from './components/update/AppUpdateBadge';
 import AppUpdateModal from './components/update/AppUpdateModal';
 import WelcomeDialog from './components/WelcomeDialog';
-import WindowTitleBar from './components/window/WindowTitleBar';
+import WindowsAppTitleBar from './components/window/WindowsAppTitleBar';
 import { defaultConfig, getProviderDisplayName, ShortcutAction } from './config';
 import type { ApiConfig } from './services/api';
 import { apiService } from './services/api';
@@ -390,6 +390,14 @@ const App: React.FC = () => {
   }, [openHomeWithKit]);
 
   const handleToggleSidebar = useCallback(() => {
+    const nextCollapsed = !isSidebarCollapsed;
+    const message = `sidebar toggle requested activeView=${mainView} nextCollapsed=${nextCollapsed} platform=${window.electron.platform}`;
+    console.debug(`[AppLayout] ${message}`);
+    try {
+      window.electron?.log?.fromRenderer?.('debug', 'AppLayout', message);
+    } catch {
+      // Logging should never block sidebar interactions.
+    }
     void reportYdAnalyzer({
       action: LogReporterAction.SidebarAction,
       source: 'home_sidebar',
@@ -958,9 +966,7 @@ const App: React.FC = () => {
     />
   ) : null;
   const windowsStandaloneTitleBar = isWindows ? (
-    <div className="draggable relative h-9 shrink-0 bg-surface-raised">
-      <WindowTitleBar isOverlayActive={isOverlayActive} />
-    </div>
+    <WindowsAppTitleBar isOverlayActive={isOverlayActive} />
   ) : null;
 
   if (!isInitialized) {
@@ -1021,6 +1027,7 @@ const App: React.FC = () => {
       {toastMessage && (
         <Toast message={toastMessage} onClose={() => setToastMessage(null)} />
       )}
+      {windowsStandaloneTitleBar}
       <div className="flex flex-1 min-h-0 overflow-hidden">
         <Sidebar
           onShowLogin={handleShowLogin}

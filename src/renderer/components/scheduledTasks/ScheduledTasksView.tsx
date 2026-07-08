@@ -9,7 +9,6 @@ import { RootState } from '../../store';
 import { selectTask, setViewMode } from '../../store/slices/scheduledTaskSlice';
 import ComposeIcon from '../icons/ComposeIcon';
 import SidebarToggleIcon from '../icons/SidebarToggleIcon';
-import WindowTitleBar from '../window/WindowTitleBar';
 import AllRunsHistory from './AllRunsHistory';
 import { getTaskAnalyticsParams, reportScheduledTaskAction } from './analytics';
 import DeleteConfirmModal from './DeleteConfirmModal';
@@ -234,7 +233,6 @@ const ScheduledTasksView: React.FC<ScheduledTasksViewProps> = ({
             {i18nService.t('scheduledTasksTitle')}
           </h1>
         </div>
-        <WindowTitleBar inline />
       </div>
 
       {/* Page header: title + subtitle + tabs + New Task button */}

@@ -33,7 +33,6 @@ import ComposeIcon from '../icons/ComposeIcon';
 import SidebarToggleIcon from '../icons/SidebarToggleIcon';
 import { PromptPanel, QuickActionBar } from '../quick-actions';
 import type { SettingsOpenOptions } from '../Settings';
-import WindowTitleBar from '../window/WindowTitleBar';
 import { useAgentSelectedModel } from './agentModelSelection';
 import { CoworkUiEvent } from './constants';
 import CoworkPromptInput, { type CoworkPromptInputRef } from './CoworkPromptInput';
@@ -69,6 +68,7 @@ export interface CoworkViewProps {
 const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSkills, onShowKits, isSidebarCollapsed, onToggleSidebar, onNewChat, updateBadge }) => {
   const dispatch = useDispatch();
   const isMac = window.electron.platform === 'darwin';
+  const isWindows = window.electron.platform === 'win32';
   const [isInitialized, setIsInitialized] = useState(false);
   const [openClawStatus, setOpenClawStatus] = useState<OpenClawEngineStatus | null>(null);
   const [isRestartingGateway, setIsRestartingGateway] = useState(false);
@@ -680,9 +680,6 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
   if (!isInitialized) {
     return (
       <div className="flex-1 h-full flex flex-col bg-background">
-        <div className="draggable flex h-12 items-center justify-end px-4 border-b border-border shrink-0">
-          <WindowTitleBar inline />
-        </div>
         <div className="flex-1 flex items-center justify-center">
           <div className="text-secondary">
             {i18nService.t('loading')}
@@ -699,7 +696,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
   const homeHeader = (
     <div className="draggable flex h-12 items-center justify-between px-4 shrink-0">
       <div className="non-draggable h-8 flex items-center">
-        {isSidebarCollapsed && (
+        {isSidebarCollapsed && !isWindows && (
           <div className={`flex items-center gap-1 mr-2 ${isMac ? 'pl-[68px]' : ''}`}>
             <button
               type="button"
@@ -726,7 +723,33 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
             {i18nService.t('lobsterGuardEnabled')}
           </span>
         </div>
-        <WindowTitleBar inline />
+        {isWindows && onToggleSidebar && (
+          <div className="flex items-center gap-1">
+            {isSidebarCollapsed && (
+              <>
+                {onNewChat && (
+                  <button
+                    type="button"
+                    onClick={onNewChat}
+                    className="h-8 w-8 inline-flex items-center justify-center rounded-lg text-secondary hover:bg-surface-raised transition-colors"
+                  >
+                    <ComposeIcon className="h-4 w-4" />
+                  </button>
+                )}
+                {updateBadge}
+              </>
+            )}
+            <button
+              type="button"
+              onClick={onToggleSidebar}
+              className="h-8 w-8 inline-flex items-center justify-center rounded-lg text-secondary hover:bg-surface-raised transition-colors"
+              aria-label={isSidebarCollapsed ? i18nService.t('expand') : i18nService.t('collapse')}
+              title={isSidebarCollapsed ? i18nService.t('expand') : i18nService.t('collapse')}
+            >
+              <SidebarToggleIcon className="h-4 w-4" isCollapsed={Boolean(isSidebarCollapsed)} />
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

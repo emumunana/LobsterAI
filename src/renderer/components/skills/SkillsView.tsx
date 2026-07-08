@@ -3,7 +3,6 @@ import React from 'react';
 import { i18nService } from '../../services/i18n';
 import ComposeIcon from '../icons/ComposeIcon';
 import SidebarToggleIcon from '../icons/SidebarToggleIcon';
-import WindowTitleBar from '../window/WindowTitleBar';
 import SkillsManager from './SkillsManager';
 
 interface SkillsViewProps {
@@ -44,7 +43,6 @@ const SkillsView: React.FC<SkillsViewProps> = ({ isSidebarCollapsed, onToggleSid
             {i18nService.t('skills')}
           </h1>
         </div>
-        <WindowTitleBar inline />
       </div>
 
       <div className="flex-1 overflow-y-auto min-h-0 [scrollbar-gutter:stable]">

@@ -8,7 +8,6 @@ import type { RootState } from '../../store';
 import type { PresetAgent } from '../../types/agent';
 import ComposeIcon from '../icons/ComposeIcon';
 import SidebarToggleIcon from '../icons/SidebarToggleIcon';
-import WindowTitleBar from '../window/WindowTitleBar';
 import AgentAvatarIcon from './AgentAvatarIcon';
 import AgentCreateModal from './AgentCreateModal';
 import AgentSettingsPanel from './AgentSettingsPanel';
@@ -86,7 +85,6 @@ const AgentsView: React.FC<AgentsViewProps> = ({
             {i18nService.t('myAgents')}
           </h1>
         </div>
-        <WindowTitleBar inline />
       </div>
 
       {/* Content */}

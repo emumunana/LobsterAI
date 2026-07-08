@@ -83,7 +83,6 @@ import FileTypeIcon from '../icons/fileTypes/FileTypeIcon';
 import SidebarToggleIcon from '../icons/SidebarToggleIcon';
 import SubagentIcon from '../icons/SubagentIcon';
 import MarkdownContent from '../MarkdownContent';
-import WindowTitleBar from '../window/WindowTitleBar';
 import AssistantTurnBlock, { ContextCompactionDivider } from './AssistantTurnBlock';
 import { type CoworkOpenShareOptionsEventDetail, CoworkUiEvent } from './constants';
 import ContextUsageIndicator from './ContextUsageIndicator';
@@ -1095,6 +1094,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
 }) => {
   const dispatch = useDispatch();
   const isMac = window.electron.platform === 'darwin';
+  const isWindows = window.electron.platform === 'win32';
   const currentSession = useSelector(selectCurrentSession);
   const isStreaming = useSelector(selectIsStreaming);
   const remoteManaged = useSelector(selectRemoteManaged);
@@ -4350,7 +4350,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       >
         {/* Left side: Toggle buttons (when collapsed) + Title */}
         <div className="flex h-full flex-1 items-center gap-2 min-w-0">
-          {isSidebarCollapsed && (
+          {isSidebarCollapsed && !isWindows && (
             <div className={`non-draggable flex items-center gap-1 ${isMac ? 'pl-[68px]' : ''}`}>
               <button
                 type="button"
@@ -4623,7 +4623,33 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
             <ArtifactPanelIcon className="h-4 w-4" open={isPanelOpen} />
           </button>
 
-          <WindowTitleBar inline className="ml-1" />
+          {isWindows && onToggleSidebar && (
+            <div className="non-draggable ml-1 flex h-full items-center gap-1">
+              {isSidebarCollapsed && (
+                <>
+                  {onNewChat && (
+                    <button
+                      type="button"
+                      onClick={onNewChat}
+                      className="h-8 w-8 inline-flex items-center justify-center rounded-lg text-secondary hover:bg-surface-raised transition-colors"
+                    >
+                      <ComposeIcon className="h-4 w-4" />
+                    </button>
+                  )}
+                  {updateBadge}
+                </>
+              )}
+              <button
+                type="button"
+                onClick={onToggleSidebar}
+                className="h-8 w-8 inline-flex items-center justify-center rounded-lg text-secondary hover:bg-surface-raised transition-colors"
+                aria-label={isSidebarCollapsed ? i18nService.t('expand') : i18nService.t('collapse')}
+                title={isSidebarCollapsed ? i18nService.t('expand') : i18nService.t('collapse')}
+              >
+                <SidebarToggleIcon className="h-4 w-4" isCollapsed={Boolean(isSidebarCollapsed)} />
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
