@@ -260,7 +260,7 @@ describe('registerScheduledTaskHandlers', () => {
     expect(input.delivery).toEqual({
       mode: DeliveryMode.Announce,
       channel: 'feishu',
-      to: 'oc_zhangsan_group',
+      to: 'group:oc_zhangsan_group',
       accountId: 'feishu-bot-1',
     });
   });
@@ -282,7 +282,7 @@ describe('registerScheduledTaskHandlers', () => {
       delivery: {
         mode: DeliveryMode.Announce,
         channel: 'feishu',
-        to: 'group:oc_zhangsan_group',
+        to: 'oc_zhangsan_group',
         accountId: 'feishu-bot-1',
       },
       agentId: 'main',
@@ -340,7 +340,7 @@ describe('registerScheduledTaskHandlers', () => {
       delivery: {
         mode: DeliveryMode.Announce,
         channel: 'feishu',
-        to: 'oc_zhangsan_group',
+        to: 'group:oc_zhangsan_group',
         accountId: 'feishu-bot-1',
       },
       agentId: 'agent-feishu-bot-1',

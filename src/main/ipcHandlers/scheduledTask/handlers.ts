@@ -17,6 +17,7 @@ import { AgentId } from '../../../shared/agent/constants';
 import { OpenClawEnginePhase } from '../../../shared/openclawEngine/constants';
 import {
   imConversationDisplayName,
+  ImPeerKind,
   type ParsedImConversationId,
   parseImConversationId,
   type Platform,
@@ -46,6 +47,39 @@ type AnnounceNormalizationContext = {
   rawTo: string;
   parsedConversation: ParsedImConversationId;
 };
+
+function normalizeImAnnounceDeliveryTo(
+  rawTo: string,
+  mappings: readonly ConversationMappingForList[],
+): string {
+  const parsed = parseImConversationId(rawTo);
+  if (parsed.peerKind === ImPeerKind.Direct) {
+    return parsed.peerId;
+  }
+  if (parsed.peerKind === ImPeerKind.Group || parsed.peerKind === ImPeerKind.Channel) {
+    return `${parsed.peerKind}:${parsed.peerId}`;
+  }
+
+  const peer = parsed.peerId.trim().toLowerCase();
+  if (peer) {
+    for (const mapping of mappings) {
+      const mappingParsed = parseImConversationId(mapping.imConversationId);
+      if (mappingParsed.peerId.trim().toLowerCase() !== peer) continue;
+      if (
+        mappingParsed.peerKind === ImPeerKind.Group ||
+        mappingParsed.peerKind === ImPeerKind.Channel
+      ) {
+        return `${mappingParsed.peerKind}:${mappingParsed.peerId}`;
+      }
+    }
+  }
+
+  const colonIdx = rawTo.lastIndexOf(':');
+  if (colonIdx > 0) {
+    return rawTo.slice(colonIdx + 1);
+  }
+  return rawTo;
+}
 
 export interface ScheduledTaskHandlerDeps {
   getCronJobService: () => CronJobService;
@@ -155,7 +189,7 @@ function logChannelConversationList(params: {
 }): void {
   const filteredSet = new Set(params.filteredMappings);
   const droppedMappings = params.rawMappings.filter(mapping => !filteredSet.has(mapping));
-  console.log(
+  console.debug(
     '[ScheduledTask] listed channel conversations:',
     JSON.stringify({
       channel: params.channel,
@@ -195,6 +229,9 @@ function applyLocalAnnounceDeliveryNormalization(
   }
   const platform = PlatformRegistry.platformOfChannel(delivery.channel);
   if (!platform) return null;
+  const imStore = getIMGatewayManager()?.getIMStore();
+  const mappings = imStore?.listSessionMappings(platform) ?? [];
+  const imSettings = imStore?.getIMSettings?.();
 
   normalizedInput.sessionTarget = STSessionTarget.Isolated;
   if (normalizedInput.payload?.kind === STPayloadKind.SystemEvent) {
@@ -205,20 +242,14 @@ function applyLocalAnnounceDeliveryNormalization(
   }
 
   // Strip conversation-id prefixes (e.g. "acc:direct:ou_xxx" -> "ou_xxx").
-  // For unrecognized shapes keep the legacy last-segment behavior.
+  // Preserve group/channel kind so OpenClaw mirrors delivery results into the
+  // canonical group/channel session instead of treating a bare group id as DM.
   const rawTo: string = delivery.to;
   const parsedConversation = parseImConversationId(rawTo);
-  if (parsedConversation.peerKind) {
-    delivery.to = parsedConversation.peerId;
-  } else {
-    const colonIdx = rawTo.lastIndexOf(':');
-    if (colonIdx > 0) {
-      delivery.to = rawTo.slice(colonIdx + 1);
-    }
-  }
+  delivery.to = normalizeImAnnounceDeliveryTo(rawTo, mappings);
   if (delivery.to !== rawTo) {
     console.debug(
-      '[ScheduledTask] stripped IM subtype prefix from delivery.to:',
+      '[ScheduledTask] normalized IM delivery.to:',
       rawTo,
       '->',
       delivery.to,
@@ -234,10 +265,8 @@ function applyLocalAnnounceDeliveryNormalization(
     : '';
   if (!existingAgentId || existingAgentId === AgentId.Main) {
     try {
-      const imStore = getIMGatewayManager()?.getIMStore();
-      const imSettings = imStore?.getIMSettings?.();
       const boundAgentId = resolveConversationAgentIdFromMappings(
-        imStore?.listSessionMappings(platform) ?? [],
+        mappings,
         rawTo,
         parsedConversation.accountId ?? delivery.accountId,
         {

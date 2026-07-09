@@ -30,6 +30,26 @@ describe('resolveImDeliveryHintsFromSessions', () => {
     expect(hints).toEqual({ to: TRUE_CASE_PEER, accountId: 'weixin-bot-1' });
   });
 
+  test('preserves group delivery target kind when restoring session hints', () => {
+    const hints = resolveImDeliveryHintsFromSessions({
+      sessions: [
+        {
+          updatedAt: 1_000,
+          lastChannel: 'feishu',
+          lastTo: 'oc_ZhangSan_Group',
+          lastAccountId: 'feishu-bot-1',
+        },
+      ],
+      channel: 'feishu',
+      peerId: 'group:oc_zhangsan_group',
+    });
+
+    expect(hints).toEqual({
+      to: 'group:oc_ZhangSan_Group',
+      accountId: 'feishu-bot-1',
+    });
+  });
+
   test('ignores sessions from other channels, other peers, and malformed rows', () => {
     const hints = resolveImDeliveryHintsFromSessions({
       sessions: [

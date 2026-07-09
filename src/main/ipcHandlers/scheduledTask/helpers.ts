@@ -1,4 +1,4 @@
-import { parseImConversationId, PlatformRegistry } from '../../../shared/platform';
+import { ImPeerKind, parseImConversationId, PlatformRegistry } from '../../../shared/platform';
 import type { Platform } from '../../im/types';
 import { resolveAgentBinding } from '../../libs/openclawChannelSessionSync';
 
@@ -165,7 +165,8 @@ export function resolveImDeliveryHintsFromSessions(params: {
   preferredAccountId?: string;
 }): ImDeliveryHints | null {
   const platform = PlatformRegistry.platformOfChannel(params.channel);
-  const peerLower = params.peerId.trim().toLowerCase();
+  const requestedPeer = parseImConversationId(params.peerId);
+  const peerLower = requestedPeer.peerId.trim().toLowerCase();
   if (!platform || !peerLower) return null;
 
   interface Candidate {
@@ -184,9 +185,14 @@ export function resolveImDeliveryHintsFromSessions(params: {
       asNonEmptyString(session.channel);
     if (!rowChannel || PlatformRegistry.platformOfChannel(rowChannel) !== platform) continue;
     const to = asNonEmptyString(session.lastTo) ?? asNonEmptyString(context?.to);
-    if (!to || to.toLowerCase() !== peerLower) continue;
+    const toPeer = to ? parseImConversationId(to).peerId : '';
+    if (!to || toPeer.toLowerCase() !== peerLower) continue;
+    const normalizedTo =
+      requestedPeer.peerKind === ImPeerKind.Group || requestedPeer.peerKind === ImPeerKind.Channel
+        ? `${requestedPeer.peerKind}:${toPeer}`
+        : to;
     candidates.push({
-      to,
+      to: normalizedTo,
       accountId: asNonEmptyString(session.lastAccountId) ?? asNonEmptyString(context?.accountId),
       updatedAt:
         typeof session.updatedAt === 'number' && Number.isFinite(session.updatedAt)
