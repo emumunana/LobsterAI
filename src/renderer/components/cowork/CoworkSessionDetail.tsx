@@ -1159,6 +1159,13 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const planConfirmation = useSelector((state: RootState) =>
     currentSession?.id ? state.cowork.planConfirmations[currentSession.id] : undefined
   );
+  const queuedSteerCount = useSelector((state: RootState) => {
+    if (!currentSession?.id) return 0;
+    return (
+      (state.cowork.pendingSteers[currentSession.id]?.length ?? 0)
+      + (state.cowork.rejectedSteers[currentSession.id]?.length ?? 0)
+    );
+  });
   const messageRailIndex = useSelector((state: RootState) =>
     currentSession?.id ? state.cowork.messageRailIndexBySessionId[currentSession.id] ?? [] : []
   );
@@ -1684,6 +1691,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const [isExpandedPromptInputHidden, setIsExpandedPromptInputHidden] = useState(false);
   const [isExpandedConversationPreviewOpen, setIsExpandedConversationPreviewOpen] = useState(false);
   const [goalStatusBarPortalTarget, setGoalStatusBarPortalTarget] = useState<HTMLDivElement | null>(null);
+  const [steerPreviewPortalTarget, setSteerPreviewPortalTarget] = useState<HTMLDivElement | null>(null);
   const previousArtifactPanelOpenRef = useRef(isPanelOpen);
   const fileListPreviewTabOpenBySessionRef = useRef<Record<string, boolean>>({});
   const browserPreviewTabOpenBySessionRef = useRef<Record<string, boolean>>({});
@@ -4262,11 +4270,9 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const artifactPanelOverlayBottom = artifactPanelIsOverlay && !isExpandedPromptInputHidden
     ? promptInputAreaHeight
     : 0;
-  const showExternalGoalStatusBar = Boolean(
-    currentSession.goal
-    && !remoteManaged
-    && !(isArtifactPanelExpanded && isExpandedPromptInputHidden)
-  );
+  const showPromptAuxiliaryBars = !remoteManaged && !(isArtifactPanelExpanded && isExpandedPromptInputHidden);
+  const showExternalGoalStatusBar = Boolean(currentSession.goal && showPromptAuxiliaryBars);
+  const showExternalSteerPreview = queuedSteerCount > 0 && showPromptAuxiliaryBars;
   const artifactPanelInnerWidth = artifactPanelIsOverlay ? '100%' : artifactPanelFrameWidth;
   const shouldShowTurnNavigationRail = railItems.length > 1 && isScrollable;
   const shouldShowScrollToBottom = isScrollable && !shouldAutoScroll;
@@ -5130,8 +5136,13 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
         )}
         <div className={COWORK_DETAIL_CONTENT_CLASS}>
           {showExternalGoalStatusBar && (
-            <div className="relative z-10 -mb-px">
+            <div className={`relative z-10 ${showExternalSteerPreview ? 'mb-1.5' : '-mb-px'}`}>
               <div ref={setGoalStatusBarPortalTarget} />
+            </div>
+          )}
+          {showExternalSteerPreview && (
+            <div className="relative z-10 -mb-px">
+              <div ref={setSteerPreviewPortalTarget} />
             </div>
           )}
           <CoworkPromptInput
@@ -5155,6 +5166,8 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
             goal={!remoteManaged ? currentSession?.goal : null}
             onGoalCommand={!remoteManaged && currentSession?.id ? handleGoalCommand : undefined}
             goalStatusBarPortalTarget={showExternalGoalStatusBar ? goalStatusBarPortalTarget : null}
+            goalStatusBarAttached={!showExternalSteerPreview}
+            steerPreviewPortalTarget={showExternalSteerPreview ? steerPreviewPortalTarget : null}
             contextUsageControl={(
               <div className="flex min-w-0 items-center gap-2">
                 <div ref={compactConfirmRef} className="relative inline-flex flex-shrink-0">

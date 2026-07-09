@@ -392,6 +392,8 @@ interface CoworkPromptInputProps {
   goal?: CoworkGoal | null;
   onGoalCommand?: (command: string) => boolean | void | Promise<boolean | void>;
   goalStatusBarPortalTarget?: HTMLElement | null;
+  goalStatusBarAttached?: boolean;
+  steerPreviewPortalTarget?: HTMLElement | null;
   canSteer?: boolean;
   /** When true, hides attachment/skill buttons but keeps the input box visible (disabled) */
   remoteManaged?: boolean;
@@ -425,6 +427,8 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
       goal,
       onGoalCommand,
       goalStatusBarPortalTarget,
+      goalStatusBarAttached = true,
+      steerPreviewPortalTarget,
       canSteer = false,
       remoteManaged = false,
     } = props;
@@ -3027,19 +3031,29 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     });
   };
 
-  const renderSteerQueueItem = (steer: CoworkPendingSteer, source: 'pending' | 'rejected') => {
+  const shouldUseExternalSteerPreview = steerPreviewPortalTarget !== undefined;
+  const renderSteerQueueItem = (
+    steer: CoworkPendingSteer,
+    source: 'pending' | 'rejected',
+    options: { external?: boolean; separated?: boolean } = {},
+  ) => {
     const isRejected = source === 'rejected';
     const displayText = steer.text || steer.attachments?.map(attachment => attachment.name).join(', ') || '';
     const title = isRejected && steer.error
       ? `${i18nService.t('coworkSteerRejected')}: ${steer.error}`
       : `${i18nService.t('coworkSteerQueued')}: ${displayText}`;
+    const shapeClass = options.external
+      ? ''
+      : 'rounded-lg';
+    const surfaceClass = options.external ? 'bg-transparent' : 'border border-border bg-surface-raised/70';
+    const dividerClass = options.separated ? 'border-t border-border' : '';
     return (
       <div
         key={steer.id}
         role="status"
         title={title}
         aria-label={title}
-        className={`flex min-w-0 items-center gap-2 rounded-lg border border-border bg-surface-raised/70 px-2.5 py-1.5 text-xs ${
+        className={`flex min-w-0 items-center gap-2 px-2.5 py-1.5 text-xs ${shapeClass} ${surfaceClass} ${dividerClass} ${
           isRejected ? 'text-warning' : 'text-secondary'
         }`}
       >
@@ -3089,14 +3103,26 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     );
   };
 
-  const steerPreview = pendingSteers.length > 0 || rejectedSteers.length > 0 ? (
-    <div className={`${isCompact ? 'px-3 pt-2' : 'px-4 pt-3'}`}>
-      <div className="space-y-1.5">
-        {pendingSteers.map(steer => renderSteerQueueItem(steer, 'pending'))}
-        {rejectedSteers.map(steer => renderSteerQueueItem(steer, 'rejected'))}
+  const steerPreviewItems = [
+    ...pendingSteers.map(steer => ({ steer, source: 'pending' as const })),
+    ...rejectedSteers.map(steer => ({ steer, source: 'rejected' as const })),
+  ];
+  const externalSteerPreviewClass = `${isCompact ? 'mx-3' : 'mx-5'} max-h-[156px] overflow-y-auto rounded-t-2xl rounded-b-none border border-b-0 border-border bg-surface-raised/60`;
+  const steerPreviewNode = steerPreviewItems.length > 0 ? (
+    <div className={shouldUseExternalSteerPreview ? externalSteerPreviewClass : `${isCompact ? 'px-3 pt-2' : 'px-4 pt-3'}`}>
+      <div className={shouldUseExternalSteerPreview ? '' : 'space-y-1.5'}>
+        {steerPreviewItems.map(({ steer, source }, index) => renderSteerQueueItem(steer, source, {
+          external: shouldUseExternalSteerPreview,
+          separated: shouldUseExternalSteerPreview && index > 0,
+        }))}
       </div>
     </div>
   ) : null;
+  const steerPreview = steerPreviewNode
+    ? steerPreviewPortalTarget
+      ? createPortal(steerPreviewNode, steerPreviewPortalTarget)
+      : shouldUseExternalSteerPreview ? null : steerPreviewNode
+    : null;
 
   const goalActionsDisabled = disabled || voiceInputLocksEditing || !onGoalCommand;
   const shouldUseExternalGoalStatusBar = goalStatusBarPortalTarget !== undefined;
@@ -3118,7 +3144,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
           aria-label={detail}
           className={`flex min-w-0 items-center gap-2 border border-border bg-surface-raised/60 px-2.5 py-1.5 text-xs text-secondary ${
             shouldUseExternalGoalStatusBar
-              ? `${isCompact ? 'mx-3' : 'mx-5'} rounded-t-2xl rounded-b-none border-b-0`
+              ? `${isCompact ? 'mx-3' : 'mx-5'} ${goalStatusBarAttached ? 'rounded-t-2xl rounded-b-none border-b-0' : 'rounded-xl'}`
               : 'rounded-xl shadow-subtle'
           }`}
         >
