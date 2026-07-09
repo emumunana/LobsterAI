@@ -538,6 +538,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     const inputSourceOverrideRef = useRef<'template' | null>(null);
     const wasStreamingRef = useRef(isStreaming);
     const autoSubmittingQueuedSteerRef = useRef<string | null>(null);
+    const queuedFollowUpTurnStartingRef = useRef(false);
     const interruptingQueuedSteerIdRef = useRef<string | null>(null);
     const suppressQueuedSteerAfterStopRef = useRef(false);
 
@@ -1351,29 +1352,42 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
   ]);
 
   const submitQueuedFollowUp = useCallback((
-    queuedSteer: CoworkPendingSteer,
+    queuedSteerOrBatch: CoworkPendingSteer | CoworkPendingSteer[],
     trigger: 'completed' | 'interrupted' | 'idle_click' | 'idle_recovery',
   ) => {
     if (!sessionId || remoteManaged || disabled) return;
-    if (autoSubmittingQueuedSteerRef.current === queuedSteer.id) {
+    const queuedSteers = Array.isArray(queuedSteerOrBatch) ? queuedSteerOrBatch : [queuedSteerOrBatch];
+    const primarySteer = queuedSteers[0];
+    if (!primarySteer) return;
+    const queuedSteerIds = queuedSteers.map(steer => steer.id);
+    if (autoSubmittingQueuedSteerRef.current || queuedFollowUpTurnStartingRef.current) {
       console.debug(
-        `[CoworkSteer] skipped duplicate queued follow-up submit for session ${sessionId}; `
-        + `id=${queuedSteer.id}; trigger=${trigger}.`,
+        `[CoworkSteer] skipped queued follow-up submit while another queued follow-up is starting; `
+        + `session=${sessionId}; activeId=${autoSubmittingQueuedSteerRef.current ?? 'turn_starting'}; `
+        + `ids=${queuedSteerIds.join(',')}; trigger=${trigger}.`,
       );
       return;
     }
 
-    autoSubmittingQueuedSteerRef.current = queuedSteer.id;
+    const basePrompt = queuedSteers
+      .map(steer => steer.text.trim())
+      .filter(Boolean)
+      .join('\n\n');
+    const mergedAttachments = queuedSteers.flatMap(steer => steer.attachments ?? []);
+    const mergedSelectedTextSnippets = queuedSteers.flatMap(steer => steer.selectedTextSnippets ?? []);
+
+    autoSubmittingQueuedSteerRef.current = primarySteer.id;
     console.debug(
       `[CoworkSteer] preparing queued follow-up for session ${sessionId}; `
-      + `id=${queuedSteer.id}; trigger=${trigger}; chars=${queuedSteer.text.length}; `
-      + `attachments=${queuedSteer.attachments?.length ?? 0}.`,
+      + `ids=${queuedSteerIds.join(',')}; trigger=${trigger}; `
+      + `count=${queuedSteers.length}; chars=${basePrompt.length}; `
+      + `attachments=${mergedAttachments.length}.`,
     );
 
     void preparePromptPayload({
-      basePrompt: queuedSteer.text,
-      attachments: queuedSteer.attachments ?? [],
-      selectedTextSnippets: queuedSteer.selectedTextSnippets ?? [],
+      basePrompt,
+      attachments: mergedAttachments,
+      selectedTextSnippets: mergedSelectedTextSnippets,
       submitMethod: 'button',
     })
       .then((payload) => {
@@ -1382,7 +1396,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
         }
         console.debug(
           `[CoworkSteer] submitting queued follow-up for session ${sessionId}; `
-          + `id=${queuedSteer.id}; trigger=${trigger}; chars=${payload.finalPrompt.length}; `
+          + `ids=${queuedSteerIds.join(',')}; trigger=${trigger}; chars=${payload.finalPrompt.length}; `
           + `imageAttachments=${payload.imageAttachments?.length ?? 0}; `
           + `mediaReferences=${payload.mediaReferences?.length ?? 0}.`,
         );
@@ -1399,16 +1413,19 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
         if (result === false) {
           console.warn(
             `[CoworkSteer] queued follow-up was rejected by normal continue flow for session ${sessionId}; `
-            + `id=${queuedSteer.id}; trigger=${trigger}.`,
+            + `ids=${queuedSteerIds.join(',')}; trigger=${trigger}.`,
           );
           return;
         }
-        dispatch(removePendingSteer({ sessionId, steerId: queuedSteer.id }));
+        queuedFollowUpTurnStartingRef.current = true;
+        queuedSteers.forEach((steer) => {
+          dispatch(removePendingSteer({ sessionId, steerId: steer.id }));
+        });
       })
       .catch((error) => {
         console.error(
           `[CoworkSteer] failed to submit queued follow-up for session ${sessionId}; `
-          + `id=${queuedSteer.id}; trigger=${trigger}.`,
+          + `ids=${queuedSteerIds.join(',')}; trigger=${trigger}.`,
           error,
         );
       })
@@ -1420,7 +1437,18 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
   useEffect(() => {
     const wasStreaming = wasStreamingRef.current;
     wasStreamingRef.current = isStreaming;
-    if (isStreaming || !sessionId || remoteManaged || disabled) {
+    if (isStreaming) {
+      queuedFollowUpTurnStartingRef.current = false;
+      return;
+    }
+    if (!sessionId || remoteManaged || disabled) {
+      return;
+    }
+    if (queuedFollowUpTurnStartingRef.current) {
+      console.debug(
+        `[CoworkSteer] waiting for queued follow-up turn to enter streaming before submitting more; `
+        + `session=${sessionId}; queued=${pendingSteers.length}.`,
+      );
       return;
     }
 
@@ -1444,15 +1472,17 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     }
 
     const trigger = interruptingQueuedSteerId ? 'interrupted' : wasStreaming ? 'completed' : 'idle_recovery';
+    const queuedBatch = interruptingQueuedSteerId ? pendingSteers : [nextQueuedSteer];
     interruptingQueuedSteerIdRef.current = null;
     console.debug(
       `[CoworkSteer] queued follow-up trigger=${trigger}; `
       + `session=${sessionId}; `
-      + `id=${nextQueuedSteer.id}; chars=${nextQueuedSteer.text.length}; `
+      + `ids=${queuedBatch.map(steer => steer.id).join(',')}; count=${queuedBatch.length}; `
+      + `chars=${queuedBatch.reduce((total, steer) => total + steer.text.length, 0)}; `
       + `streamTransition=${wasStreaming ? 'yes' : 'no'}; `
-      + `attachments=${nextQueuedSteer.attachments?.length ?? 0}.`,
+      + `attachments=${queuedBatch.reduce((total, steer) => total + (steer.attachments?.length ?? 0), 0)}.`,
     );
-    submitQueuedFollowUp(nextQueuedSteer, trigger);
+    submitQueuedFollowUp(queuedBatch, trigger);
   }, [disabled, isStreaming, pendingSteers, remoteManaged, sessionId, submitQueuedFollowUp]);
 
   const handleSubmit = useCallback(async (submitMethod: 'button' | 'keyboard' | 'voice' = 'button') => {
@@ -3064,12 +3094,14 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
 
   const handleSteerQueuedInput = (steer: CoworkPendingSteer) => {
     if (!sessionId || remoteManaged || disabled) return;
+    const queuedBatch = pendingSteers.length > 0 ? pendingSteers : [steer];
     if (!isStreaming) {
       console.debug(
         `[CoworkSteer] submitting queued follow-up from idle click; `
-        + `session=${sessionId}; id=${steer.id}; chars=${steer.text.length}.`,
+        + `session=${sessionId}; ids=${queuedBatch.map(item => item.id).join(',')}; `
+        + `count=${queuedBatch.length}.`,
       );
-      submitQueuedFollowUp(steer, 'idle_click');
+      submitQueuedFollowUp(queuedBatch, 'idle_click');
       return;
     }
     if (!onStop) {
@@ -3083,7 +3115,8 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     interruptingQueuedSteerIdRef.current = steer.id;
     console.debug(
       `[CoworkSteer] interrupting active turn for queued steer follow-up; `
-      + `session=${sessionId}; id=${steer.id}; chars=${steer.text.length}.`,
+      + `session=${sessionId}; ids=${queuedBatch.map(item => item.id).join(',')}; `
+      + `count=${queuedBatch.length}.`,
     );
     void Promise.resolve(onStop()).catch((error) => {
       interruptingQueuedSteerIdRef.current = null;
