@@ -1967,6 +1967,8 @@ function createReconcileStore(
   let nextId = session.messages.length + 1;
   let replaceCallCount = 0;
   let lastReplaceArgs: { sessionId: string; authoritative: Array<Record<string, unknown>> } | null = null;
+  let replaceSessionCallCount = 0;
+  let lastReplaceSessionArgs: { sessionId: string; messages: Array<Record<string, unknown>> } | null = null;
   const updateSessionCalls: Array<{
     sessionId: string;
     patch: Record<string, unknown>;
@@ -1977,6 +1979,8 @@ function createReconcileStore(
     session,
     getReplaceCallCount: () => replaceCallCount,
     getLastReplaceArgs: () => lastReplaceArgs,
+    getReplaceSessionCallCount: () => replaceSessionCallCount,
+    getLastReplaceSessionArgs: () => lastReplaceSessionArgs,
     getUpdateSessionCalls: () => updateSessionCalls,
     store: {
       getSession: (sessionId: string) => (sessionId === session.id ? session : null),
@@ -2022,6 +2026,38 @@ function createReconcileStore(
             type: entry.role,
             content: entry.text,
             metadata: { isStreaming: false, isFinal: true, ...(entry.metadata ?? {}) },
+            timestamp: typeof entry.timestamp === 'number' ? entry.timestamp : nextId,
+          });
+        }
+      },
+      replaceSessionMessages: (sessionId: string, messages: Array<Record<string, unknown>>) => {
+        replaceSessionCallCount++;
+        lastReplaceSessionArgs = { sessionId, messages };
+        lastReplaceArgs = {
+          sessionId,
+          authoritative: messages
+            .filter((entry) => entry.type === 'user' || entry.type === 'assistant')
+            .map((entry) => {
+              const authoritative: Record<string, unknown> = {
+                role: entry.type,
+                text: entry.content,
+              };
+              if (typeof entry.timestamp === 'number') {
+                authoritative.timestamp = entry.timestamp;
+              }
+              if (entry.type === 'user' && entry.metadata !== undefined) {
+                authoritative.metadata = entry.metadata;
+              }
+              return authoritative;
+            }),
+        };
+        session.messages = session.messages.filter((m) => m.type === 'system');
+        for (const entry of messages) {
+          session.messages.push({
+            id: `msg-${nextId++}`,
+            type: entry.type,
+            content: entry.content,
+            metadata: entry.metadata,
             timestamp: typeof entry.timestamp === 'number' ? entry.timestamp : nextId,
           });
         }
