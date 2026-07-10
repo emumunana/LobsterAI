@@ -29,10 +29,12 @@ import {
   listScheduledTaskChannels,
   resolveConversationAgentIdFromMappings,
   resolveImDeliveryHintsFromSessions,
+  resolveWecomGroupDeliveryTargetFromSessions,
 } from './helpers';
 
 /** Matches auto-generated channel session titles, e.g. "[TG] group:123". */
 const AUTO_CHANNEL_TITLE_RE = /^\[[^\]]*\]\s/;
+const WECOM_PLATFORM: Platform = 'wecom';
 
 type ConversationMappingForList = {
   imConversationId: string;
@@ -51,6 +53,7 @@ type AnnounceNormalizationContext = {
 function normalizeImAnnounceDeliveryTo(
   rawTo: string,
   mappings: readonly ConversationMappingForList[],
+  platform: Platform,
 ): string {
   const parsed = parseImConversationId(rawTo);
   if (
@@ -59,6 +62,12 @@ function normalizeImAnnounceDeliveryTo(
     parsed.peerKind === ImPeerKind.Channel
   ) {
     return parsed.peerId;
+  }
+
+  // A bare WeCom target is already the provider-native id. Do not replace its
+  // case from a lowercased OpenClaw session mapping during legacy migration.
+  if (platform === WECOM_PLATFORM && !rawTo.includes(':')) {
+    return rawTo;
   }
 
   const peer = parsed.peerId.trim().toLowerCase();
@@ -243,7 +252,7 @@ function applyLocalAnnounceDeliveryNormalization(
   // marker (group:oc_xxx).
   const rawTo: string = delivery.to;
   const parsedConversation = parseImConversationId(rawTo);
-  delivery.to = normalizeImAnnounceDeliveryTo(rawTo, mappings);
+  delivery.to = normalizeImAnnounceDeliveryTo(rawTo, mappings, platform);
   if (delivery.to !== rawTo) {
     console.debug(
       '[ScheduledTask] normalized IM delivery.to:',
@@ -290,6 +299,7 @@ async function restoreAnnounceDeliveryHintsFromGateway(
   normalizedInput: Record<string, any>,
   context: AnnounceNormalizationContext,
   deps: Pick<ScheduledTaskHandlerDeps, 'getOpenClawRuntimeAdapter'>,
+  options?: { wecomCasingOnly?: boolean },
 ): Promise<void> {
   const { getOpenClawRuntimeAdapter } = deps;
   const delivery = normalizedInput.delivery;
@@ -311,24 +321,47 @@ async function restoreAnnounceDeliveryHintsFromGateway(
           { includeGlobal: true, includeUnknown: true, limit: 500 },
           { timeoutMs: 10_000 },
         );
-        const hints = resolveImDeliveryHintsFromSessions({
-          sessions: Array.isArray(result?.sessions) ? result.sessions : [],
-          channel: delivery.channel,
-          peerId: delivery.to,
-          preferredAccountId: context.parsedConversation.accountId,
-        });
-        if (hints) {
-          if (hints.to !== delivery.to) {
+        const sessions = Array.isArray(result?.sessions) ? result.sessions : [];
+        const selectedAccountId = typeof delivery.accountId === 'string'
+          ? delivery.accountId
+          : undefined;
+        if (!options?.wecomCasingOnly) {
+          const hints = resolveImDeliveryHintsFromSessions({
+            sessions,
+            channel: delivery.channel,
+            peerId: delivery.to,
+            preferredAccountId: context.parsedConversation.accountId,
+          });
+          if (hints) {
+            if (hints.to !== delivery.to) {
+              console.log(
+                '[ScheduledTask] restored delivery.to casing from gateway session:',
+                delivery.to,
+                '->',
+                hints.to,
+              );
+              delivery.to = hints.to;
+            }
+            if (!delivery.accountId && hints.accountId) {
+              delivery.accountId = hints.accountId;
+            }
+          }
+        }
+
+        if (context.platform === WECOM_PLATFORM) {
+          const nativeGroupTarget = resolveWecomGroupDeliveryTargetFromSessions({
+            sessions,
+            peerId: delivery.to,
+            preferredAccountId: selectedAccountId,
+          });
+          if (nativeGroupTarget && nativeGroupTarget !== delivery.to) {
             console.log(
-              '[ScheduledTask] restored delivery.to casing from gateway session:',
+              '[ScheduledTask] restored WeCom group delivery.to casing from gateway origin:',
               delivery.to,
               '->',
-              hints.to,
+              nativeGroupTarget,
             );
-            delivery.to = hints.to;
-          }
-          if (!delivery.accountId && hints.accountId) {
-            delivery.accountId = hints.accountId;
+            delivery.to = nativeGroupTarget;
           }
         }
       }
@@ -385,10 +418,13 @@ function stableJson(value: unknown): string {
   return JSON.stringify(value);
 }
 
-function buildLocalAnnounceNormalizationPatch(
+async function buildAnnounceNormalizationPatch(
   task: ScheduledTask,
-  deps: Pick<ScheduledTaskHandlerDeps, 'getIMGatewayManager'>,
-): Partial<ScheduledTaskInput> | null {
+  deps: Pick<
+    ScheduledTaskHandlerDeps,
+    'getIMGatewayManager' | 'getOpenClawRuntimeAdapter'
+  >,
+): Promise<Partial<ScheduledTaskInput> | null> {
   const normalizedInput: Record<string, any> = {
     sessionTarget: task.sessionTarget,
     payload: clonePayload(task.payload),
@@ -398,6 +434,20 @@ function buildLocalAnnounceNormalizationPatch(
   };
   const context = applyLocalAnnounceDeliveryNormalization(normalizedInput, deps);
   if (!context) return null;
+  const normalizedTo = typeof normalizedInput.delivery?.to === 'string'
+    ? normalizedInput.delivery.to.trim()
+    : '';
+  if (
+    context.platform === WECOM_PLATFORM &&
+    normalizedTo &&
+    normalizedTo === normalizedTo.toLowerCase()
+  ) {
+    // Historical repair must only restore the case-sensitive WeCom group id;
+    // it must not infer or change account routing from gateway metadata.
+    await restoreAnnounceDeliveryHintsFromGateway(normalizedInput, context, deps, {
+      wecomCasingOnly: true,
+    });
+  }
 
   const patch: Partial<ScheduledTaskInput> = {};
   if (normalizedInput.sessionTarget !== task.sessionTarget) {
@@ -427,9 +477,12 @@ function buildLocalAnnounceNormalizationPatch(
 
 async function migrateScheduledTaskAnnounceJob(
   task: ScheduledTask,
-  deps: Pick<ScheduledTaskHandlerDeps, 'getCronJobService' | 'getIMGatewayManager'>,
+  deps: Pick<
+    ScheduledTaskHandlerDeps,
+    'getCronJobService' | 'getIMGatewayManager' | 'getOpenClawRuntimeAdapter'
+  >,
 ): Promise<boolean> {
-  const patch = buildLocalAnnounceNormalizationPatch(task, deps);
+  const patch = await buildAnnounceNormalizationPatch(task, deps);
   if (!patch) return false;
   await deps.getCronJobService().updateJob(task.id, patch);
   console.log(
@@ -445,7 +498,10 @@ async function migrateScheduledTaskAnnounceJob(
 }
 
 export async function migrateScheduledTaskAnnounceJobs(
-  deps: Pick<ScheduledTaskHandlerDeps, 'getCronJobService' | 'getIMGatewayManager'>,
+  deps: Pick<
+    ScheduledTaskHandlerDeps,
+    'getCronJobService' | 'getIMGatewayManager' | 'getOpenClawRuntimeAdapter'
+  >,
 ): Promise<{ checked: number; updated: number }> {
   const tasks = await deps.getCronJobService().listJobs();
   let updated = 0;
@@ -585,6 +641,7 @@ export function registerScheduledTaskHandlers(deps: ScheduledTaskHandlerDeps): v
         await migrateScheduledTaskAnnounceJob(task, {
           getCronJobService,
           getIMGatewayManager,
+          getOpenClawRuntimeAdapter,
         });
       }
       await cronJobService.runJob(id);

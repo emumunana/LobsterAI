@@ -21,7 +21,11 @@ import {
 } from '../../../scheduledTask/constants';
 import type { CronJobService } from '../../../scheduledTask/cronJobService';
 import { OpenClawEnginePhase } from '../../../shared/openclawEngine/constants';
-import { registerScheduledTaskHandlers, type ScheduledTaskHandlerDeps } from './handlers';
+import {
+  migrateScheduledTaskAnnounceJobs,
+  registerScheduledTaskHandlers,
+  type ScheduledTaskHandlerDeps,
+} from './handlers';
 
 function makeDeps(
   enginePhase: OpenClawEnginePhase = OpenClawEnginePhase.Running,
@@ -151,6 +155,141 @@ describe('registerScheduledTaskHandlers', () => {
       accountId: 'weixin-bot-1',
     });
     expect(result).toEqual({ success: true, task: { id: 'job-1', name: '科技早报' } });
+  });
+
+  test('restores a WeCom group chat id from case-preserving origin metadata on create', async () => {
+    const nativeGroupId = 'wrrQeUDgAAeLCVE2WB3A39jXRlrSVEyA';
+    const request = vi.fn(async () => ({
+      sessions: [
+        {
+          updatedAt: 2_000,
+          origin: {
+            provider: 'wecom',
+            surface: 'wecom',
+            chatType: 'group',
+            to: `wecom:${nativeGroupId}`,
+            accountId: 'wecom-bot-1',
+          },
+        },
+      ],
+    }));
+    const { cronJobService, deps } = makeDeps(OpenClawEnginePhase.Running, {
+      gatewayClient: { request },
+    });
+    registerScheduledTaskHandlers(deps);
+
+    const handler = registeredHandlers.get(ScheduledTaskIpc.Create);
+    await handler?.(undefined, {
+      name: 'wecom group',
+      enabled: true,
+      schedule: { kind: 'cron', expr: '0 13 * * *' },
+      payload: { kind: PayloadKind.AgentTurn, message: 'hi' },
+      delivery: {
+        mode: DeliveryMode.Announce,
+        channel: 'wecom',
+        to: `group:${nativeGroupId.toLowerCase()}`,
+        accountId: 'wecom-bot-1',
+      },
+    });
+
+    const input = cronJobService.addJob.mock.calls[0][0] as {
+      delivery: Record<string, unknown>;
+    };
+    expect(input.delivery).toEqual({
+      mode: DeliveryMode.Announce,
+      channel: 'wecom',
+      to: nativeGroupId,
+      accountId: 'wecom-bot-1',
+    });
+  });
+
+  test('repairs only the casing of an existing WeCom group target', async () => {
+    const nativeGroupId = 'wrrQeUDgAAeLCVE2WB3A39jXRlrSVEyA';
+    const request = vi.fn(async () => ({
+      sessions: [
+        {
+          lastChannel: 'wecom',
+          lastTo: nativeGroupId.toLowerCase(),
+          lastAccountId: 'inferred-account-must-not-be-added',
+          origin: {
+            provider: 'wecom',
+            chatType: 'group',
+            to: `wecom:${nativeGroupId}`,
+            accountId: 'wecom-bot-1',
+          },
+        },
+      ],
+    }));
+    const { cronJobService, deps } = makeDeps(OpenClawEnginePhase.Running, {
+      gatewayClient: { request },
+    });
+    cronJobService.listJobs.mockResolvedValue([
+      {
+        id: 'legacy-wecom-job',
+        name: 'legacy wecom group',
+        description: '',
+        enabled: true,
+        schedule: { kind: 'cron', expr: '0 13 * * *' },
+        sessionTarget: SessionTarget.Isolated,
+        wakeMode: WakeMode.Now,
+        payload: { kind: PayloadKind.AgentTurn, message: 'hi' },
+        delivery: {
+          mode: DeliveryMode.Announce,
+          channel: 'wecom',
+          to: nativeGroupId.toLowerCase(),
+        },
+        agentId: 'agent-wecom-bot-1',
+        sessionKey: null,
+        state: {},
+        createdAt: '2026-07-09T00:00:00.000Z',
+        updatedAt: '2026-07-09T00:00:00.000Z',
+      },
+    ]);
+
+    const result = await migrateScheduledTaskAnnounceJobs(deps);
+
+    expect(result).toEqual({ checked: 1, updated: 1 });
+    expect(cronJobService.updateJob).toHaveBeenCalledWith('legacy-wecom-job', {
+      delivery: {
+        mode: DeliveryMode.Announce,
+        channel: 'wecom',
+        to: nativeGroupId,
+      },
+    });
+  });
+
+  test('preserves an existing native-case WeCom target when gateway hints are unavailable', async () => {
+    const nativeGroupId = 'wrrQeUDgAAeLCVE2WB3A39jXRlrSVEyA';
+    const { adapter, cronJobService, deps } = makeDeps(OpenClawEnginePhase.Starting);
+    cronJobService.listJobs.mockResolvedValue([
+      {
+        id: 'native-wecom-job',
+        name: 'native wecom group',
+        description: '',
+        enabled: true,
+        schedule: { kind: 'cron', expr: '0 13 * * *' },
+        sessionTarget: SessionTarget.Isolated,
+        wakeMode: WakeMode.Now,
+        payload: { kind: PayloadKind.AgentTurn, message: 'hi' },
+        delivery: {
+          mode: DeliveryMode.Announce,
+          channel: 'wecom',
+          to: nativeGroupId,
+          accountId: 'wecom-bot-1',
+        },
+        agentId: 'agent-wecom-bot-1',
+        sessionKey: null,
+        state: {},
+        createdAt: '2026-07-09T00:00:00.000Z',
+        updatedAt: '2026-07-09T00:00:00.000Z',
+      },
+    ]);
+
+    const result = await migrateScheduledTaskAnnounceJobs(deps);
+
+    expect(result).toEqual({ checked: 1, updated: 0 });
+    expect(cronJobService.updateJob).not.toHaveBeenCalled();
+    expect(adapter.connectGatewayIfNeeded).not.toHaveBeenCalled();
   });
 
   test('binds the job to the conversation agent for agent-bound IM targets', async () => {

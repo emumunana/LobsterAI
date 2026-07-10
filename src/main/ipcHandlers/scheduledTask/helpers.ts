@@ -10,6 +10,8 @@ export interface ScheduledTaskHelperDeps {
 
 let deps: ScheduledTaskHelperDeps | null = null;
 
+const WECOM_PLATFORM: Platform = 'wecom';
+
 export function initScheduledTaskHelpers(d: ScheduledTaskHelperDeps): void {
   deps = d;
 }
@@ -133,6 +135,13 @@ interface GatewaySessionRowLike {
   lastTo?: unknown;
   lastAccountId?: unknown;
   deliveryContext?: { channel?: unknown; to?: unknown; accountId?: unknown } | null;
+  origin?: {
+    provider?: unknown;
+    surface?: unknown;
+    chatType?: unknown;
+    to?: unknown;
+    accountId?: unknown;
+  } | null;
 }
 
 export interface ImDeliveryHints {
@@ -216,6 +225,55 @@ export function resolveImDeliveryHintsFromSessions(params: {
   pool.sort((a, b) => b.updatedAt - a.updatedAt);
   const best = pool[0];
   return { to: best.to, ...(best.accountId ? { accountId: best.accountId } : {}) };
+}
+
+/**
+ * Restores a WeCom group's case-sensitive native chat id from inbound session
+ * origin metadata. WeCom group sessions intentionally do not update
+ * `lastTo`/`deliveryContext`, while OpenClaw lowercases their session keys.
+ *
+ * This is deliberately narrower than `resolveImDeliveryHintsFromSessions`:
+ * only WeCom group origins are considered, an explicitly selected account must
+ * match, and conflicting native ids are rejected instead of picking one.
+ */
+export function resolveWecomGroupDeliveryTargetFromSessions(params: {
+  sessions: readonly unknown[];
+  peerId: string;
+  preferredAccountId?: string;
+}): string | null {
+  const requestedPeer = parseImConversationId(params.peerId).peerId.trim().toLowerCase();
+  const preferredAccountId = params.preferredAccountId?.trim();
+  if (!requestedPeer) return null;
+
+  const nativeTargets = new Set<string>();
+  for (const row of params.sessions) {
+    if (!row || typeof row !== 'object') continue;
+    const origin = (row as GatewaySessionRowLike).origin;
+    if (!origin || origin.chatType !== ImPeerKind.Group) continue;
+
+    const originChannel = asNonEmptyString(origin.provider) ?? asNonEmptyString(origin.surface);
+    if (!originChannel || PlatformRegistry.platformOfChannel(originChannel) !== WECOM_PLATFORM) {
+      continue;
+    }
+
+    const originAccountId = asNonEmptyString(origin.accountId);
+    if (preferredAccountId && originAccountId !== preferredAccountId) continue;
+
+    const originTo = asNonEmptyString(origin.to);
+    if (!originTo) continue;
+    const colonIndex = originTo.indexOf(':');
+    const prefix = colonIndex > 0 ? originTo.slice(0, colonIndex) : '';
+    const withoutChannel = prefix && PlatformRegistry.platformOfChannel(prefix) === WECOM_PLATFORM
+      ? originTo.slice(colonIndex + 1)
+      : originTo;
+    const parsedTarget = parseImConversationId(withoutChannel);
+    if (parsedTarget.peerKind && parsedTarget.peerKind !== ImPeerKind.Group) continue;
+    const nativePeer = parsedTarget.peerId.trim();
+    if (!nativePeer || nativePeer.toLowerCase() !== requestedPeer) continue;
+    nativeTargets.add(nativePeer);
+  }
+
+  return nativeTargets.size === 1 ? [...nativeTargets][0] : null;
 }
 
 /**

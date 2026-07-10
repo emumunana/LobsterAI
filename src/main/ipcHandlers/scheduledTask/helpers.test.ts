@@ -5,6 +5,7 @@ import {
   filterConversationMappingsForSelectedAccount,
   resolveConversationAgentIdFromMappings,
   resolveImDeliveryHintsFromSessions,
+  resolveWecomGroupDeliveryTargetFromSessions,
 } from './helpers';
 
 const TRUE_CASE_PEER = 'WxId_ZhangSan@im.wechat';
@@ -122,6 +123,77 @@ describe('resolveImDeliveryHintsFromSessions', () => {
       peerId: 'userid-abc',
     });
     expect(hints).toEqual({ to: 'UserId-ABC' });
+  });
+});
+
+describe('resolveWecomGroupDeliveryTargetFromSessions', () => {
+  const nativeGroupId = 'wrrQeUDgAAeLCVE2WB3A39jXRlrSVEyA';
+  const lowerGroupId = nativeGroupId.toLowerCase();
+
+  function wecomGroupOrigin(
+    accountId: string,
+    to = `wecom:${nativeGroupId}`,
+    overrides: Record<string, unknown> = {},
+  ): Record<string, unknown> {
+    return {
+      origin: {
+        provider: 'wecom',
+        surface: 'wecom',
+        chatType: 'group',
+        to,
+        accountId,
+        ...overrides,
+      },
+    };
+  }
+
+  test('restores the native group id from WeCom origin metadata', () => {
+    expect(
+      resolveWecomGroupDeliveryTargetFromSessions({
+        sessions: [wecomGroupOrigin('bot-1')],
+        peerId: lowerGroupId,
+        preferredAccountId: 'bot-1',
+      }),
+    ).toBe(nativeGroupId);
+  });
+
+  test('requires the selected bot account to match when one is provided', () => {
+    expect(
+      resolveWecomGroupDeliveryTargetFromSessions({
+        sessions: [
+          wecomGroupOrigin('other-bot', `wecom:${lowerGroupId}`),
+          wecomGroupOrigin('bot-1'),
+        ],
+        peerId: lowerGroupId,
+        preferredAccountId: 'bot-1',
+      }),
+    ).toBe(nativeGroupId);
+  });
+
+  test('rejects conflicting native ids instead of guessing', () => {
+    expect(
+      resolveWecomGroupDeliveryTargetFromSessions({
+        sessions: [
+          wecomGroupOrigin('bot-1'),
+          wecomGroupOrigin('bot-1', `wecom:${lowerGroupId}`),
+        ],
+        peerId: lowerGroupId,
+        preferredAccountId: 'bot-1',
+      }),
+    ).toBeNull();
+  });
+
+  test('ignores direct chats and non-WeCom origins', () => {
+    expect(
+      resolveWecomGroupDeliveryTargetFromSessions({
+        sessions: [
+          wecomGroupOrigin('bot-1', `wecom:${nativeGroupId}`, { chatType: 'direct' }),
+          wecomGroupOrigin('bot-1', `feishu:${nativeGroupId}`, { provider: 'feishu' }),
+        ],
+        peerId: lowerGroupId,
+        preferredAccountId: 'bot-1',
+      }),
+    ).toBeNull();
   });
 });
 
