@@ -30,6 +30,7 @@ jobs:
           filters: |
             renderer:
               - 'src/renderer/**'
+              - 'src/shared/**'
               - 'vite.config.ts'
               - 'tsconfig.json'
               - 'tailwind.config.js'
@@ -37,6 +38,7 @@ jobs:
             main:
               - 'src/main/**'
               - 'src/common/**'
+              - 'src/shared/**'
               - 'electron-tsconfig.json'
               - 'src/main/preload.ts'
             skills:

@@ -11,6 +11,7 @@ import { ArrowUpIcon, FolderIcon } from '@heroicons/react/24/solid';
 import { AuthSubscriptionStatus } from '@shared/auth/constants';
 import { ProviderName } from '@shared/providers';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useDispatch, useSelector } from 'react-redux';
 
 import {
@@ -91,9 +92,9 @@ import {
 } from '../common/activeContextBadgeStyles';
 import Modal from '../common/Modal';
 import DefaultAgentIcon from '../icons/DefaultAgentIcon';
+import EditIcon from '../icons/EditIcon';
 import GoalIcon from '../icons/GoalIcon';
 import PaperClipIcon from '../icons/PaperClipIcon';
-import PencilIcon from '../icons/PencilIcon';
 import PlanModeIcon from '../icons/PlanModeIcon';
 import PromptAddIcon from '../icons/PromptAddIcon';
 import SkillIcon from '../icons/SkillIcon';
@@ -162,6 +163,42 @@ const summarizePromptShape = (prompt: string): string => {
   const orderedListLines = lines.filter(line => /^\s*\d+\.\s+/.test(line)).length;
   return `chars=${prompt.length}, lines=${lines.length}, blankLines=${blankLines}, orderedListLines=${orderedListLines}`;
 };
+
+const SteerQueueStatusIcon: React.FC<React.SVGProps<SVGSVGElement>> = ({ className, ...props }) => (
+  <svg
+    className={className}
+    viewBox="0 0 16 16"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="1.45"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+    {...props}
+  >
+    <path d="M3.75 3.5v6.7c0 .86.7 1.55 1.55 1.55h6.45" />
+    <path d="m10.15 10.1 1.65 1.65-1.65 1.65" />
+    <path d="M5.75 5.6h4" />
+    <path d="M5.75 7.9h3" />
+  </svg>
+);
+
+const SteerQueueIcon: React.FC<React.SVGProps<SVGSVGElement>> = ({ className, ...props }) => (
+  <svg
+    className={className}
+    viewBox="0 0 16 16"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="1.6"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+    {...props}
+  >
+    <path d="M3.5 3.5v3.25c0 1.52 1.23 2.75 2.75 2.75h6" />
+    <path d="m10.25 7.75 1.75 1.75-1.75 1.75" />
+  </svg>
+);
 
 const getModelAnalyticsSource = (model: Model, selectorGroup: ModelSelectorChangeMeta['group']): string => {
   if (model.isServerModel || model.providerKey === ProviderName.LobsteraiServer || selectorGroup === ModelSelectorGroup.Server) {
@@ -390,6 +427,9 @@ interface CoworkPromptInputProps {
   contextUsageControl?: React.ReactNode;
   goal?: CoworkGoal | null;
   onGoalCommand?: (command: string) => boolean | void | Promise<boolean | void>;
+  goalStatusBarPortalTarget?: HTMLElement | null;
+  goalStatusBarAttached?: boolean;
+  steerPreviewPortalTarget?: HTMLElement | null;
   canSteer?: boolean;
   /** When true, hides attachment/skill buttons but keeps the input box visible (disabled) */
   remoteManaged?: boolean;
@@ -422,6 +462,9 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
       contextUsageControl,
       goal,
       onGoalCommand,
+      goalStatusBarPortalTarget,
+      goalStatusBarAttached = true,
+      steerPreviewPortalTarget,
       canSteer = false,
       remoteManaged = false,
     } = props;
@@ -495,6 +538,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     const inputSourceOverrideRef = useRef<'template' | null>(null);
     const wasStreamingRef = useRef(isStreaming);
     const autoSubmittingQueuedSteerRef = useRef<string | null>(null);
+    const queuedFollowUpTurnStartingRef = useRef(false);
     const interruptingQueuedSteerIdRef = useRef<string | null>(null);
     const suppressQueuedSteerAfterStopRef = useRef(false);
 
@@ -1307,10 +1351,104 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     reportPromptControl,
   ]);
 
+  const submitQueuedFollowUp = useCallback((
+    queuedSteerOrBatch: CoworkPendingSteer | CoworkPendingSteer[],
+    trigger: 'completed' | 'interrupted' | 'idle_click' | 'idle_recovery',
+  ) => {
+    if (!sessionId || remoteManaged || disabled) return;
+    const queuedSteers = Array.isArray(queuedSteerOrBatch) ? queuedSteerOrBatch : [queuedSteerOrBatch];
+    const primarySteer = queuedSteers[0];
+    if (!primarySteer) return;
+    const queuedSteerIds = queuedSteers.map(steer => steer.id);
+    if (autoSubmittingQueuedSteerRef.current || queuedFollowUpTurnStartingRef.current) {
+      console.debug(
+        `[CoworkSteer] skipped queued follow-up submit while another queued follow-up is starting; `
+        + `session=${sessionId}; activeId=${autoSubmittingQueuedSteerRef.current ?? 'turn_starting'}; `
+        + `ids=${queuedSteerIds.join(',')}; trigger=${trigger}.`,
+      );
+      return;
+    }
+
+    const basePrompt = queuedSteers
+      .map(steer => steer.text.trim())
+      .filter(Boolean)
+      .join('\n\n');
+    const mergedAttachments = queuedSteers.flatMap(steer => steer.attachments ?? []);
+    const mergedSelectedTextSnippets = queuedSteers.flatMap(steer => steer.selectedTextSnippets ?? []);
+
+    autoSubmittingQueuedSteerRef.current = primarySteer.id;
+    console.debug(
+      `[CoworkSteer] preparing queued follow-up for session ${sessionId}; `
+      + `ids=${queuedSteerIds.join(',')}; trigger=${trigger}; `
+      + `count=${queuedSteers.length}; chars=${basePrompt.length}; `
+      + `attachments=${mergedAttachments.length}.`,
+    );
+
+    void preparePromptPayload({
+      basePrompt,
+      attachments: mergedAttachments,
+      selectedTextSnippets: mergedSelectedTextSnippets,
+      submitMethod: 'button',
+    })
+      .then((payload) => {
+        if (!payload) {
+          return false;
+        }
+        console.debug(
+          `[CoworkSteer] submitting queued follow-up for session ${sessionId}; `
+          + `ids=${queuedSteerIds.join(',')}; trigger=${trigger}; chars=${payload.finalPrompt.length}; `
+          + `imageAttachments=${payload.imageAttachments?.length ?? 0}; `
+          + `mediaReferences=${payload.mediaReferences?.length ?? 0}.`,
+        );
+        return onSubmit(
+          payload.finalPrompt,
+          undefined,
+          payload.imageAttachments,
+          payload.mediaReferences,
+          payload.selectedTextSnippets,
+          CoworkCollaborationMode.Default,
+        );
+      })
+      .then((result) => {
+        if (result === false) {
+          console.warn(
+            `[CoworkSteer] queued follow-up was rejected by normal continue flow for session ${sessionId}; `
+            + `ids=${queuedSteerIds.join(',')}; trigger=${trigger}.`,
+          );
+          return;
+        }
+        queuedFollowUpTurnStartingRef.current = true;
+        queuedSteers.forEach((steer) => {
+          dispatch(removePendingSteer({ sessionId, steerId: steer.id }));
+        });
+      })
+      .catch((error) => {
+        console.error(
+          `[CoworkSteer] failed to submit queued follow-up for session ${sessionId}; `
+          + `ids=${queuedSteerIds.join(',')}; trigger=${trigger}.`,
+          error,
+        );
+      })
+      .finally(() => {
+        autoSubmittingQueuedSteerRef.current = null;
+      });
+  }, [disabled, dispatch, onSubmit, preparePromptPayload, remoteManaged, sessionId]);
+
   useEffect(() => {
     const wasStreaming = wasStreamingRef.current;
     wasStreamingRef.current = isStreaming;
-    if (isStreaming || !wasStreaming || !sessionId || remoteManaged || disabled) {
+    if (isStreaming) {
+      queuedFollowUpTurnStartingRef.current = false;
+      return;
+    }
+    if (!sessionId || remoteManaged || disabled) {
+      return;
+    }
+    if (queuedFollowUpTurnStartingRef.current) {
+      console.debug(
+        `[CoworkSteer] waiting for queued follow-up turn to enter streaming before submitting more; `
+        + `session=${sessionId}; queued=${pendingSteers.length}.`,
+      );
       return;
     }
 
@@ -1332,65 +1470,20 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
       interruptingQueuedSteerIdRef.current = null;
       return;
     }
-    if (autoSubmittingQueuedSteerRef.current === nextQueuedSteer.id) {
-      return;
-    }
 
-    autoSubmittingQueuedSteerRef.current = nextQueuedSteer.id;
+    const trigger = interruptingQueuedSteerId ? 'interrupted' : wasStreaming ? 'completed' : 'idle_recovery';
+    const queuedBatch = interruptingQueuedSteerId ? pendingSteers : [nextQueuedSteer];
     interruptingQueuedSteerIdRef.current = null;
     console.debug(
-      `[CoworkSteer] active turn ${interruptingQueuedSteerId ? 'interrupted' : 'completed'}; `
-      + `preparing queued follow-up for session ${sessionId}; `
-      + `id=${nextQueuedSteer.id}; chars=${nextQueuedSteer.text.length}; `
-      + `attachments=${nextQueuedSteer.attachments?.length ?? 0}.`,
+      `[CoworkSteer] queued follow-up trigger=${trigger}; `
+      + `session=${sessionId}; `
+      + `ids=${queuedBatch.map(steer => steer.id).join(',')}; count=${queuedBatch.length}; `
+      + `chars=${queuedBatch.reduce((total, steer) => total + steer.text.length, 0)}; `
+      + `streamTransition=${wasStreaming ? 'yes' : 'no'}; `
+      + `attachments=${queuedBatch.reduce((total, steer) => total + (steer.attachments?.length ?? 0), 0)}.`,
     );
-
-    void preparePromptPayload({
-      basePrompt: nextQueuedSteer.text,
-      attachments: nextQueuedSteer.attachments ?? [],
-      selectedTextSnippets: nextQueuedSteer.selectedTextSnippets ?? [],
-      submitMethod: 'button',
-    })
-      .then((payload) => {
-        if (!payload) {
-          return false;
-        }
-        console.debug(
-          `[CoworkSteer] submitting queued follow-up for session ${sessionId}; `
-          + `id=${nextQueuedSteer.id}; chars=${payload.finalPrompt.length}; `
-          + `imageAttachments=${payload.imageAttachments?.length ?? 0}; `
-          + `mediaReferences=${payload.mediaReferences?.length ?? 0}.`,
-        );
-        return onSubmit(
-          payload.finalPrompt,
-          undefined,
-          payload.imageAttachments,
-          payload.mediaReferences,
-          payload.selectedTextSnippets,
-          CoworkCollaborationMode.Default,
-        );
-      })
-      .then((result) => {
-        if (result === false) {
-          console.warn(
-            `[CoworkSteer] queued follow-up was rejected by normal continue flow for session ${sessionId}; `
-            + `id=${nextQueuedSteer.id}.`,
-          );
-          return;
-        }
-        dispatch(removePendingSteer({ sessionId, steerId: nextQueuedSteer.id }));
-      })
-      .catch((error) => {
-        console.error(
-          `[CoworkSteer] failed to submit queued follow-up for session ${sessionId}; `
-          + `id=${nextQueuedSteer.id}.`,
-          error,
-        );
-      })
-      .finally(() => {
-        autoSubmittingQueuedSteerRef.current = null;
-      });
-  }, [disabled, dispatch, isStreaming, onSubmit, pendingSteers, preparePromptPayload, remoteManaged, sessionId]);
+    submitQueuedFollowUp(queuedBatch, trigger);
+  }, [disabled, isStreaming, pendingSteers, remoteManaged, sessionId, submitQueuedFollowUp]);
 
   const handleSubmit = useCallback(async (submitMethod: 'button' | 'keyboard' | 'voice' = 'button') => {
     let effectiveSubmitMethod = submitMethod;
@@ -2380,6 +2473,8 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
 
   const handleTogglePlanMode = useCallback(() => {
     const nextMode = isPlanMode ? CoworkCollaborationMode.Default : CoworkCollaborationMode.Plan;
+    handleCloseSkillsPopover();
+    setShowAddMenu(false);
     logPromptModelSelection('debug', `plan mode ${nextMode === CoworkCollaborationMode.Plan ? 'enabled' : 'disabled'} for draft ${draftKey}`);
     reportPromptControl(nextMode === CoworkCollaborationMode.Plan ? 'plan_mode_enabled' : 'plan_mode_disabled', {
       entry: LogReporterEntry.PromptToolsMenu,
@@ -2404,7 +2499,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
         entry: LogReporterEntry.PromptToolsMenu,
       });
     }
-  }, [dispatch, draftKey, goalInputActive, isPlanMode, planConfirmation?.messageId, planConfirmation?.state, reportPromptControl, resetGoalInput]);
+  }, [dispatch, draftKey, goalInputActive, handleCloseSkillsPopover, isPlanMode, planConfirmation?.messageId, planConfirmation?.state, reportPromptControl, resetGoalInput]);
 
   const handleEnableGoalInput = useCallback((mode: GoalInputMode = 'start', initialValue?: string) => {
     if (disabled || voiceInputLocksEditing || !onGoalCommand) return;
@@ -2842,18 +2937,6 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
           >
             <PlanModeIcon className="h-5 w-5 shrink-0 text-secondary" />
             <span className="min-w-0 flex-1 truncate">{i18nService.t('coworkPlanMode')}</span>
-            <span
-              className={`relative h-5 w-9 rounded-full transition-colors ${
-                isPlanMode ? 'bg-primary' : 'bg-neutral-200 dark:bg-neutral-700'
-              }`}
-              aria-hidden="true"
-            >
-              <span
-                className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${
-                  isPlanMode ? 'translate-x-4' : 'translate-x-0.5'
-                }`}
-              />
-            </span>
           </button>
 
           <SkillsPopover
@@ -3010,19 +3093,30 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
   };
 
   const handleSteerQueuedInput = (steer: CoworkPendingSteer) => {
-    if (!sessionId || remoteManaged) return;
-    if (!isStreaming || !onStop) {
+    if (!sessionId || remoteManaged || disabled) return;
+    const queuedBatch = pendingSteers.length > 0 ? pendingSteers : [steer];
+    if (!isStreaming) {
+      console.debug(
+        `[CoworkSteer] submitting queued follow-up from idle click; `
+        + `session=${sessionId}; ids=${queuedBatch.map(item => item.id).join(',')}; `
+        + `count=${queuedBatch.length}.`,
+      );
+      submitQueuedFollowUp(queuedBatch, 'idle_click');
+      return;
+    }
+    if (!onStop) {
       console.debug(
         `[CoworkSteer] queued follow-up remains scheduled without interrupting active turn; `
         + `session=${sessionId}; id=${steer.id}; chars=${steer.text.length}; `
-        + `reason=${!isStreaming ? 'not_streaming' : 'missing_stop_handler'}.`,
+        + 'reason=missing_stop_handler.',
       );
       return;
     }
     interruptingQueuedSteerIdRef.current = steer.id;
     console.debug(
       `[CoworkSteer] interrupting active turn for queued steer follow-up; `
-      + `session=${sessionId}; id=${steer.id}; chars=${steer.text.length}.`,
+      + `session=${sessionId}; ids=${queuedBatch.map(item => item.id).join(',')}; `
+      + `count=${queuedBatch.length}.`,
     );
     void Promise.resolve(onStop()).catch((error) => {
       interruptingQueuedSteerIdRef.current = null;
@@ -3034,25 +3128,35 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     });
   };
 
-  const renderSteerQueueItem = (steer: CoworkPendingSteer, source: 'pending' | 'rejected') => {
+  const shouldUseExternalSteerPreview = steerPreviewPortalTarget !== undefined;
+  const renderSteerQueueItem = (
+    steer: CoworkPendingSteer,
+    source: 'pending' | 'rejected',
+    options: { external?: boolean; separated?: boolean } = {},
+  ) => {
     const isRejected = source === 'rejected';
     const displayText = steer.text || steer.attachments?.map(attachment => attachment.name).join(', ') || '';
     const title = isRejected && steer.error
       ? `${i18nService.t('coworkSteerRejected')}: ${steer.error}`
       : `${i18nService.t('coworkSteerQueued')}: ${displayText}`;
+    const shapeClass = options.external
+      ? ''
+      : 'rounded-lg';
+    const surfaceClass = options.external ? 'bg-transparent' : 'border border-border bg-surface-raised/70';
+    const dividerClass = options.separated ? 'border-t border-border' : '';
     return (
       <div
         key={steer.id}
         role="status"
         title={title}
         aria-label={title}
-        className={`flex min-w-0 items-center gap-2 rounded-lg border border-border bg-surface-raised/70 px-2.5 py-1.5 text-xs ${
+        className={`flex min-w-0 items-center gap-2 px-2.5 py-1.5 text-xs ${shapeClass} ${surfaceClass} ${dividerClass} ${
           isRejected ? 'text-warning' : 'text-secondary'
         }`}
       >
         {isRejected
           ? <ExclamationTriangleIcon className="h-4 w-4 shrink-0 text-warning" />
-          : <ArrowTurnDownRightIcon className="h-4 w-4 shrink-0" />}
+          : <SteerQueueStatusIcon className="h-4 w-4 shrink-0" />}
         <span className={`shrink-0 font-medium ${isRejected ? 'text-warning' : 'text-foreground'}`}>
           {isRejected ? i18nService.t('coworkSteerRejected') : i18nService.t('coworkSteerQueued')}
         </span>
@@ -3069,7 +3173,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
               title={i18nService.t('coworkSteerInterruptTooltip')}
               aria-label={i18nService.t('coworkSteerInterruptTooltip')}
             >
-              <ArrowTurnDownRightIcon className="h-3.5 w-3.5" />
+              <SteerQueueIcon className="h-3.5 w-3.5" />
               <span>{i18nService.t('coworkSteer')}</span>
             </button>
           )}
@@ -3080,7 +3184,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
             title={i18nService.t('edit')}
             aria-label={i18nService.t('edit')}
           >
-            <PencilIcon className="h-3.5 w-3.5" />
+            <EditIcon className="h-3.5 w-3.5" />
           </button>
           <button
             type="button"
@@ -3096,17 +3200,30 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     );
   };
 
-  const steerPreview = pendingSteers.length > 0 || rejectedSteers.length > 0 ? (
-    <div className={`${isCompact ? 'px-3 pt-2' : 'px-4 pt-3'}`}>
-      <div className="space-y-1.5">
-        {pendingSteers.map(steer => renderSteerQueueItem(steer, 'pending'))}
-        {rejectedSteers.map(steer => renderSteerQueueItem(steer, 'rejected'))}
+  const steerPreviewItems = [
+    ...pendingSteers.map(steer => ({ steer, source: 'pending' as const })),
+    ...rejectedSteers.map(steer => ({ steer, source: 'rejected' as const })),
+  ];
+  const externalSteerPreviewClass = `${isCompact ? 'mx-3' : 'mx-5'} max-h-[156px] overflow-y-auto rounded-t-2xl rounded-b-none border border-b-0 border-border bg-surface-raised/60`;
+  const steerPreviewNode = steerPreviewItems.length > 0 ? (
+    <div className={shouldUseExternalSteerPreview ? externalSteerPreviewClass : `${isCompact ? 'px-3 pt-2' : 'px-4 pt-3'}`}>
+      <div className={shouldUseExternalSteerPreview ? '' : 'space-y-1.5'}>
+        {steerPreviewItems.map(({ steer, source }, index) => renderSteerQueueItem(steer, source, {
+          external: shouldUseExternalSteerPreview,
+          separated: shouldUseExternalSteerPreview && index > 0,
+        }))}
       </div>
     </div>
   ) : null;
+  const steerPreview = steerPreviewNode
+    ? steerPreviewPortalTarget
+      ? createPortal(steerPreviewNode, steerPreviewPortalTarget)
+      : shouldUseExternalSteerPreview ? null : steerPreviewNode
+    : null;
 
   const goalActionsDisabled = disabled || voiceInputLocksEditing || !onGoalCommand;
-  const sessionGoalStatusBar = goal && !goalInputActive ? (() => {
+  const shouldUseExternalGoalStatusBar = goalStatusBarPortalTarget !== undefined;
+  const sessionGoalStatusBarNode = goal && !goalInputActive ? (() => {
     const summary = getGoalSummary(goal);
     const detail = goal.lastStatusNote
       ? `${summary}: ${goal.objective} - ${goal.lastStatusNote}`
@@ -3117,12 +3234,16 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
       ? i18nService.t('coworkGoalPause')
       : i18nService.t('coworkGoalResume');
     return (
-      <div className={`${isCompact ? 'px-3 pt-2' : 'px-4 pt-3'}`}>
+      <div className={shouldUseExternalGoalStatusBar ? '' : `${isCompact ? 'px-3 pt-2' : 'px-4 pt-3'}`}>
         <div
           role="status"
           title={detail}
           aria-label={detail}
-          className="flex min-w-0 items-center gap-2 rounded-lg border border-border bg-surface-raised/70 px-2.5 py-1.5 text-xs text-secondary"
+          className={`flex min-w-0 items-center gap-2 border border-border bg-surface-raised/60 px-2.5 py-1.5 text-xs text-secondary ${
+            shouldUseExternalGoalStatusBar
+              ? `${isCompact ? 'mx-3' : 'mx-5'} ${goalStatusBarAttached ? 'rounded-t-2xl rounded-b-none border-b-0' : 'rounded-xl'}`
+              : 'rounded-xl shadow-subtle'
+          }`}
         >
           <GoalIcon className={`h-4 w-4 shrink-0 ${
             goal.status === CoworkGoalStatus.Active
@@ -3142,7 +3263,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
               title={i18nService.t('coworkGoalEdit')}
               aria-label={i18nService.t('coworkGoalEdit')}
             >
-              <PencilIcon className="h-3.5 w-3.5" />
+              <EditIcon className="h-3.5 w-3.5" />
             </button>
             {canTogglePause && (
               <button
@@ -3173,6 +3294,11 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
       </div>
     );
   })() : null;
+  const sessionGoalStatusBar = sessionGoalStatusBarNode
+    ? goalStatusBarPortalTarget
+      ? createPortal(sessionGoalStatusBarNode, goalStatusBarPortalTarget)
+      : shouldUseExternalGoalStatusBar ? null : sessionGoalStatusBarNode
+    : null;
 
   const planModeBadge = isPlanMode ? (
     <button
