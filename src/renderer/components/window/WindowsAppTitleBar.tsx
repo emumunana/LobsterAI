@@ -55,17 +55,17 @@ const WindowsAppTitleBar: React.FC<WindowsAppTitleBarProps> = ({
   return (
     <div className="draggable flex h-9 shrink-0 items-center justify-between border-b border-border bg-surface-raised px-3">
       <div
-        className="flex h-full shrink-0 items-center justify-between"
-        style={{ width: Math.max(0, sidebarWidth - 24) }}
+        className={`flex h-full shrink-0 items-center ${isSidebarCollapsed ? 'gap-1' : 'justify-between'}`}
+        style={isSidebarCollapsed ? undefined : { width: Math.max(0, sidebarWidth - 24) }}
       >
-        <div className="flex min-w-0 items-center gap-2">
+        <div className="flex shrink-0 items-center gap-2">
           <img
             src="logo.png"
             alt=""
             draggable={false}
-            className="h-4 w-4 shrink-0"
+            className="h-4 w-4 max-w-none shrink-0"
           />
-          <span className="truncate text-sm font-medium text-foreground">
+          <span className={`${isSidebarCollapsed ? 'hidden' : 'truncate'} text-sm font-medium text-foreground`}>
             LobsterAI
           </span>
         </div>

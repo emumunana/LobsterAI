@@ -522,8 +522,16 @@ const App: React.FC = () => {
 
   const handleOpenUpdateModal = useCallback(() => {
     if (!updateInfo) return;
+
+    const message = `update modal requested status=${appUpdateState.status} source=${appUpdateState.source ?? 'none'} version=${updateInfo.latestVersion}`;
+    console.debug(`[AppUpdate] ${message}`);
+    try {
+      window.electron?.log?.fromRenderer?.('debug', 'AppUpdate', message);
+    } catch {
+      // Best-effort diagnostic only.
+    }
     setShowUpdateModal(true);
-  }, [updateInfo]);
+  }, [appUpdateState.source, appUpdateState.status, updateInfo]);
 
   const handleUpdateFound = useCallback((_info: AppUpdateInfo) => {
     setShowUpdateModal(true);
