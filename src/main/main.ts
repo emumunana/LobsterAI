@@ -9294,7 +9294,7 @@ if (!gotTheLock) {
 
   ipcMain.handle(
     DialogIpc.StatFile,
-    async (_event, filePath?: string): Promise<{ success: boolean; isFile?: boolean; size?: number; mtimeMs?: number; error?: string }> => {
+    async (_event, filePath?: string): Promise<{ success: boolean; isFile?: boolean; isDirectory?: boolean; size?: number; mtimeMs?: number; error?: string }> => {
       try {
         if (typeof filePath !== 'string' || !filePath.trim()) {
           return { success: false, error: 'Missing file path' };
@@ -9303,6 +9303,7 @@ if (!gotTheLock) {
         return {
           success: true,
           isFile: stat.isFile(),
+          isDirectory: stat.isDirectory(),
           size: stat.size,
           mtimeMs: stat.mtimeMs,
         };

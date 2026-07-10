@@ -308,6 +308,35 @@ const getFileNameFromPath = (path: string): string => {
   return parts[parts.length - 1] || path;
 };
 
+const normalizeClipboardFileUrlPath = (rawPath: string): string | null => {
+  const trimmed = rawPath.trim();
+  if (!trimmed) return null;
+  try {
+    const url = new URL(trimmed);
+    if (url.protocol !== 'file:') return null;
+    let pathname = decodeURIComponent(url.pathname);
+    if (/^\/[A-Za-z]:/.test(pathname)) {
+      pathname = pathname.slice(1);
+    }
+    return pathname || null;
+  } catch {
+    return null;
+  }
+};
+
+const getClipboardFileUrlPath = (clipboardData: DataTransfer | null): string | null => {
+  const uriList = clipboardData?.getData('text/uri-list') ?? '';
+  const uriCandidate = uriList
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .find(line => line && !line.startsWith('#'));
+  if (uriCandidate) {
+    return normalizeClipboardFileUrlPath(uriCandidate);
+  }
+  const plainText = clipboardData?.getData('text/plain') ?? '';
+  return normalizeClipboardFileUrlPath(plainText);
+};
+
 const SEND_SHORTCUT_OPTIONS = [
   { value: 'Enter', label: 'Enter', labelMac: 'Enter' },
   { value: 'Shift+Enter', label: 'Shift+Enter', labelMac: 'Shift+Enter' },
@@ -1312,7 +1341,12 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
 
     const attachmentLines = sourceAttachments
       .filter((a) => !a.path.startsWith('inline:') && !(a.isImage && imageAttachmentPathsWithPayload.has(a.path)))
-      .map((attachment) => `${i18nService.t('inputFileLabel')}: ${attachment.path}`)
+      .map((attachment) => {
+        const label = attachment.isDirectory
+          ? i18nService.t('inputFolderLabel')
+          : i18nService.t('inputFileLabel');
+        return `${label}: ${attachment.path}`;
+      })
       .join('\n');
     const finalPrompt = basePrompt
       ? (attachmentLines ? `${basePrompt}\n\n${attachmentLines}` : basePrompt)
@@ -2137,15 +2171,16 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     }
   }, [reportPromptControl, workingDirectory]);
 
-  const addAttachment = useCallback((filePath: string, imageInfo?: { isImage: boolean; dataUrl?: string }) => {
+  const addAttachment = useCallback((filePath: string, options?: { isImage?: boolean; isDirectory?: boolean; dataUrl?: string }) => {
     if (!filePath) return;
     dispatch(addDraftAttachment({
       draftKey,
       attachment: {
         path: filePath,
         name: getFileNameFromPath(filePath),
-        isImage: imageInfo?.isImage,
-        dataUrl: imageInfo?.dataUrl,
+        isImage: options?.isImage,
+        isDirectory: options?.isDirectory,
+        dataUrl: options?.dataUrl,
       },
     }));
   }, [dispatch, draftKey]);
@@ -2198,11 +2233,35 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
   }, []);
 
   const getNativeFilePath = useCallback((file: File): string | null => {
+    const bridgePath = window.electron.dialog.getPathForFile?.(file);
+    if (typeof bridgePath === 'string' && bridgePath.trim()) {
+      return bridgePath;
+    }
     const maybePath = (file as File & { path?: string }).path;
     if (typeof maybePath === 'string' && maybePath.trim()) {
       return maybePath;
     }
     return null;
+  }, []);
+
+  const statNativePath = useCallback(async (filePath: string): Promise<{ isFile: boolean; isDirectory: boolean } | null> => {
+    try {
+      const result = await window.electron.dialog.statFile(filePath);
+      if (!result.success) {
+        console.debug('[CoworkPromptInput] stat dropped/pasted path returned unsuccessful result:', {
+          path: filePath,
+          error: result.error,
+        });
+        return null;
+      }
+      return {
+        isFile: result.isFile === true,
+        isDirectory: result.isDirectory === true,
+      };
+    } catch (error) {
+      console.warn('[CoworkPromptInput] failed to stat dropped/pasted path:', error);
+      return null;
+    }
   }, []);
 
   const saveInlineFile = useCallback(async (file: File): Promise<string | null> => {
@@ -2222,7 +2281,16 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
       }
       return null;
     } catch (error) {
-      console.error('Failed to save inline file:', error);
+      const errorName = error instanceof DOMException ? error.name : '';
+      if (errorName === 'NotFoundError') {
+        console.debug('[CoworkPromptInput] skipped inline file save because the source was unavailable to FileReader:', {
+          name: file.name,
+          type: file.type,
+          size: file.size,
+        });
+      } else {
+        console.error('Failed to save inline file:', error);
+      }
       return null;
     }
   }, [fileToBase64, workingDirectory]);
@@ -2247,6 +2315,17 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     }));
     for (const file of files) {
       const nativePath = getNativeFilePath(file);
+      const nativeStat = nativePath ? await statNativePath(nativePath) : null;
+
+      if (nativePath && nativeStat?.isDirectory) {
+        console.debug('[CoworkPromptInput] handleIncomingFiles: directory attachment added', {
+          source,
+          path: nativePath,
+          name: file.name,
+        });
+        addAttachment(nativePath, { isDirectory: true });
+        continue;
+      }
 
       // Check if this is an image file and model supports images
       const fileIsImage = nativePath
@@ -2340,7 +2419,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
       hasImageWithoutVision,
       ...getAttachmentAnalyticsParams(incomingAttachments),
     });
-  }, [addAttachment, addImageAttachmentFromDataUrl, disabled, effectiveSelectedModel, fileToDataUrl, getNativeFilePath, modelSupportsImage, reportPromptControl, saveInlineFile, voiceInputLocksEditing]);
+  }, [addAttachment, addImageAttachmentFromDataUrl, disabled, effectiveSelectedModel, fileToDataUrl, getNativeFilePath, modelSupportsImage, reportPromptControl, saveInlineFile, statNativePath, voiceInputLocksEditing]);
 
   const handleAddFile = useCallback(async () => {
     if (isAddingFile || disabled || voiceInputLocksEditing) {
@@ -2695,10 +2774,41 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
   const handlePaste = useCallback((event: React.ClipboardEvent<HTMLTextAreaElement>) => {
     if (disabled || voiceInputLocksEditing) return;
     const files = Array.from(event.clipboardData?.files ?? []);
-    if (files.length === 0) return;
+    if (files.length > 0) {
+      event.preventDefault();
+      void handleIncomingFiles(files, 'paste');
+      return;
+    }
+
+    const clipboardPath = getClipboardFileUrlPath(event.clipboardData);
+    if (!clipboardPath) return;
     event.preventDefault();
-    void handleIncomingFiles(files, 'paste');
-  }, [disabled, handleIncomingFiles, voiceInputLocksEditing]);
+    void (async () => {
+      const stat = await statNativePath(clipboardPath);
+      if (!stat?.isDirectory && !stat?.isFile) {
+        console.debug('[CoworkPromptInput] pasted file URL did not resolve to a file or directory', {
+          path: clipboardPath,
+        });
+        return;
+      }
+
+      console.debug('[CoworkPromptInput] handlePaste: file URL attachment added', {
+        path: clipboardPath,
+        isDirectory: stat.isDirectory,
+      });
+      addAttachment(clipboardPath, { isDirectory: stat.isDirectory });
+      reportPromptControl('attachment_add_success', {
+        source: 'paste',
+        modelSupportsImage,
+        hasImageWithoutVision: false,
+        ...getAttachmentAnalyticsParams([{
+          path: clipboardPath,
+          name: getFileNameFromPath(clipboardPath),
+          isImage: false,
+        }]),
+      });
+    })();
+  }, [addAttachment, disabled, handleIncomingFiles, modelSupportsImage, reportPromptControl, statNativePath, voiceInputLocksEditing]);
 
   const canSubmit = !disabled
     && !isVoiceRecognizing

@@ -1012,6 +1012,7 @@ interface IElectronAPI {
       title?: string;
       filters?: { name: string; extensions: string[] }[];
     }) => Promise<{ success: boolean; paths: string[] }>;
+    getPathForFile?: (file: File) => string;
     saveInlineFile: (options: {
       dataBase64: string;
       fileName?: string;
@@ -1023,7 +1024,7 @@ interface IElectronAPI {
     ) => Promise<{ success: boolean; dataUrl?: string; error?: string }>;
     statFile: (
       filePath: string,
-    ) => Promise<{ success: boolean; isFile?: boolean; size?: number; mtimeMs?: number; error?: string }>;
+    ) => Promise<{ success: boolean; isFile?: boolean; isDirectory?: boolean; size?: number; mtimeMs?: number; error?: string }>;
     readTextFile: (
       filePath: string,
     ) => Promise<{
