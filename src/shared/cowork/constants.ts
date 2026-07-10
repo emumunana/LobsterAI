@@ -1,3 +1,11 @@
+/**
+ * Sentinel sessionId for permission requests that arrive without a resolvable
+ * OpenClaw session key (e.g. AskUserQuestion callbacks missing sessionKey).
+ * The renderer must surface these in whichever session is currently open —
+ * they can never match a real session id.
+ */
+export const SESSION_AGNOSTIC_PERMISSION_SESSION_ID = '__askuser__';
+
 /** Default page size for session list pagination. */
 export const COWORK_SESSION_PAGE_SIZE = 50;
 

@@ -5,6 +5,7 @@ import {
   DocumentArrowDownIcon,
   ExclamationTriangleIcon,
   PhotoIcon,
+  QuestionMarkCircleIcon,
 } from '@heroicons/react/24/outline';
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -1198,6 +1199,9 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const minimizedPermissionPreview = minimizedPermission
     ? getPermissionPreviewText(minimizedPermission)
     : '';
+  // AskUserQuestion is the agent asking for input, not a risky action awaiting
+  // approval — style it neutrally instead of as an amber warning.
+  const isMinimizedQuestionPermission = minimizedPermission?.toolName === 'AskUserQuestion';
   const handleDenyMinimizedPermission = useCallback(() => {
     onRespondToPermission?.({
       behavior: 'deny',
@@ -5019,31 +5023,75 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
         )}
         {minimizedPermission && (
           <div className={`${COWORK_DETAIL_CONTENT_CLASS} mb-2`}>
-            <div className="flex min-w-0 items-center gap-2 rounded-xl border border-amber-200 bg-amber-50/95 px-3 py-2 text-sm text-amber-900 shadow-subtle dark:border-amber-900/70 dark:bg-amber-950/35 dark:text-amber-100">
-              <ExclamationTriangleIcon className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-300" aria-hidden="true" />
-              <span className="shrink-0 font-medium">
-                {i18nService.t('coworkPermissionAwaiting')}
-              </span>
-              <span className="shrink-0 text-amber-700/80 dark:text-amber-200/75">
-                {minimizedPermission.toolName}
-              </span>
-              <span className="min-w-0 flex-1 truncate text-amber-800/85 dark:text-amber-100/80" title={minimizedPermissionPreview}>
-                {minimizedPermissionPreview}
-              </span>
-              {onRestorePermission && (
-                <button
-                  type="button"
-                  onClick={onRestorePermission}
-                  className="shrink-0 rounded-lg bg-amber-100 px-2.5 py-1 text-xs font-medium text-amber-900 transition-colors hover:bg-amber-200 dark:bg-amber-900/60 dark:text-amber-50 dark:hover:bg-amber-800"
+            <div
+              className={`flex min-w-0 items-center gap-1 rounded-xl border p-1 text-sm shadow-subtle ${
+                isMinimizedQuestionPermission
+                  ? 'border-border bg-surface'
+                  : 'border-amber-200 bg-amber-50/95 dark:border-amber-900/70 dark:bg-amber-950/35'
+              }`}
+            >
+              <button
+                type="button"
+                onClick={onRestorePermission}
+                disabled={!onRestorePermission}
+                className={`flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors ${
+                  isMinimizedQuestionPermission
+                    ? 'enabled:hover:bg-surface-raised'
+                    : 'enabled:hover:bg-amber-100/70 dark:enabled:hover:bg-amber-900/40'
+                }`}
+                title={minimizedPermissionPreview}
+              >
+                {isMinimizedQuestionPermission ? (
+                  <QuestionMarkCircleIcon className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
+                ) : (
+                  <ExclamationTriangleIcon className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-300" aria-hidden="true" />
+                )}
+                <span
+                  className={`shrink-0 font-medium ${
+                    isMinimizedQuestionPermission ? 'text-foreground' : 'text-amber-900 dark:text-amber-100'
+                  }`}
                 >
-                  {i18nService.t('coworkPermissionRestore')}
-                </button>
-              )}
+                  {i18nService.t(
+                    isMinimizedQuestionPermission ? 'coworkQuestionAwaitingAnswer' : 'coworkPermissionAwaiting'
+                  )}
+                </span>
+                {!isMinimizedQuestionPermission && (
+                  <span className="shrink-0 text-amber-700/80 dark:text-amber-200/75">
+                    {minimizedPermission.toolName}
+                  </span>
+                )}
+                <span
+                  className={`min-w-0 flex-1 truncate ${
+                    isMinimizedQuestionPermission
+                      ? 'text-secondary'
+                      : 'text-amber-800/85 dark:text-amber-100/80'
+                  }`}
+                >
+                  {minimizedPermissionPreview}
+                </span>
+                {onRestorePermission && (
+                  <span
+                    className={`shrink-0 rounded-lg px-2.5 py-1 text-xs font-medium ${
+                      isMinimizedQuestionPermission
+                        ? 'bg-primary/10 text-primary'
+                        : 'bg-amber-100 text-amber-900 dark:bg-amber-900/60 dark:text-amber-50'
+                    }`}
+                  >
+                    {i18nService.t(
+                      isMinimizedQuestionPermission ? 'coworkQuestionResume' : 'coworkPermissionRestore'
+                    )}
+                  </span>
+                )}
+              </button>
               {onRespondToPermission && (
                 <button
                   type="button"
                   onClick={handleDenyMinimizedPermission}
-                  className="shrink-0 rounded-lg px-2.5 py-1 text-xs font-medium text-amber-800 transition-colors hover:bg-amber-100 dark:text-amber-100 dark:hover:bg-amber-900/60"
+                  className={`shrink-0 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors ${
+                    isMinimizedQuestionPermission
+                      ? 'text-secondary hover:bg-surface-raised hover:text-foreground'
+                      : 'text-amber-800 hover:bg-amber-100 dark:text-amber-100 dark:hover:bg-amber-900/60'
+                  }`}
                 >
                   {i18nService.t('coworkDeny')}
                 </button>

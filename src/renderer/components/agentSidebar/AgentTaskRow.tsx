@@ -281,10 +281,11 @@ const AgentTaskRow: React.FC<AgentTaskRowProps> = ({
           </span>
           {task.indicator === AgentSidebarIndicator.PendingPermission && (
             <span
-              className="shrink-0 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium leading-3 text-amber-700 transition-opacity group-hover:opacity-0 dark:bg-amber-900/45 dark:text-amber-200"
+              className="inline-flex shrink-0 items-center gap-1 rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium leading-3 text-primary transition-opacity group-hover:opacity-0"
               title={indicatorLabel}
               aria-label={indicatorLabel}
             >
+              <span className="h-1 w-1 shrink-0 rounded-full bg-primary animate-pulse" aria-hidden="true" />
               {indicatorLabel}
             </span>
           )}

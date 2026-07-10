@@ -956,9 +956,10 @@ const App: React.FC = () => {
     };
   }, [isInitialized, runUpdateCheck, enterpriseConfig]);
 
-  // 根据场景选择使用哪个权限组件
+  // 根据场景选择使用哪个权限组件。最小化时保持组件挂载（仅视觉隐藏），
+  // 避免重新展开后丢失用户已选择/已输入的内容；key 按 requestId 隔离不同请求的状态。
   const permissionModal = useMemo(() => {
-    if (!pendingPermission || isPendingPermissionMinimized) return null;
+    if (!pendingPermission) return null;
 
     // 检查是否为 AskUserQuestion 且有多个问题 -> 使用向导式组件
     const isQuestionTool = pendingPermission.toolName === 'AskUserQuestion';
@@ -969,9 +970,11 @@ const App: React.FC = () => {
       if (hasMultipleQuestions) {
         return (
           <CoworkQuestionWizard
+            key={pendingPermission.requestId}
             permission={pendingPermission}
             onRespond={handlePermissionResponse}
             onMinimize={handleMinimizePermission}
+            hidden={isPendingPermissionMinimized}
           />
         );
       }
@@ -980,9 +983,11 @@ const App: React.FC = () => {
     // 其他情况使用原有的权限模态框
     return (
       <CoworkPermissionModal
+        key={pendingPermission.requestId}
         permission={pendingPermission}
         onRespond={handlePermissionResponse}
         onMinimize={handleMinimizePermission}
+        hidden={isPendingPermissionMinimized}
       />
     );
   }, [pendingPermission, handlePermissionResponse, handleMinimizePermission, isPendingPermissionMinimized]);

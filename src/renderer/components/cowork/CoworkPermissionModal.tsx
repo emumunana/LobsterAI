@@ -72,6 +72,8 @@ interface CoworkPermissionModalProps {
   permission: CoworkPermissionRequest;
   onRespond: (result: CoworkPermissionResult) => void;
   onMinimize?: () => void;
+  /** Keep the modal mounted (so in-progress answers survive) but visually hidden while minimized. */
+  hidden?: boolean;
 }
 
 type QuestionOption = {
@@ -187,6 +189,7 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
   permission,
   onRespond,
   onMinimize,
+  hidden = false,
 }) => {
   const toolInput = useMemo(() => permission.toolInput ?? {}, [permission.toolInput]);
 
@@ -414,7 +417,7 @@ const CoworkPermissionModal: React.FC<CoworkPermissionModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center modal-backdrop">
+    <div className={`fixed inset-0 z-50 items-center justify-center modal-backdrop ${hidden ? 'hidden' : 'flex'}`}>
       <div className="modal-content w-fit min-w-[28rem] max-w-[calc(100vw-2rem)] mx-4 bg-surface rounded-2xl shadow-modal overflow-hidden">
         {/* Header */}
         <div className="flex items-center gap-3 px-6 py-4 border-b border-border">

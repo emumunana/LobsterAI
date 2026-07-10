@@ -1,5 +1,6 @@
 import { createSelector } from '@reduxjs/toolkit';
 
+import { SESSION_AGNOSTIC_PERMISSION_SESSION_ID } from '../../../shared/cowork/constants';
 import type { RootState } from '../index';
 
 // --- Primitive (identity) selectors ---
@@ -58,8 +59,16 @@ export const selectFirstCurrentSessionPendingPermission = createSelector(
   selectPendingPermissions,
   selectCurrentSessionId,
   (permissions, currentSessionId) => {
-    if (!currentSessionId) return null;
-    return permissions.find((permission) => permission.sessionId === currentSessionId) ?? null;
+    const sessionScoped = currentSessionId
+      ? permissions.find((permission) => permission.sessionId === currentSessionId)
+      : undefined;
+    if (sessionScoped) return sessionScoped;
+    // Session-agnostic requests carry a sentinel sessionId that never matches a
+    // real session; they must surface wherever the user is or they silently
+    // time out (the runtime auto-denies after 120s).
+    return permissions.find(
+      (permission) => permission.sessionId === SESSION_AGNOSTIC_PERMISSION_SESSION_ID
+    ) ?? null;
   },
 );
 

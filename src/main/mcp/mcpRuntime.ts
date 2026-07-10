@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import { app, BrowserWindow } from 'electron';
 import path from 'path';
 
+import { SESSION_AGNOSTIC_PERMISSION_SESSION_ID } from '../../shared/cowork/constants';
 import { McpIpcChannel } from '../../shared/mcp/constants';
 import { isComputerUseKitInstalled } from '../computerUse/computerUseKit';
 import { resolveComputerUseMcpServer } from '../computerUse/computerUseMcpServer';
@@ -122,7 +123,7 @@ export class McpRuntime {
             this.deps.getStore().getDatabase(),
             request.sessionKey,
           )
-        : '__askuser__';
+        : SESSION_AGNOSTIC_PERMISSION_SESSION_ID;
       if (!sessionId) {
         console.warn('[AskUser] denied request for non-desktop or unknown session:', request.sessionKey);
         this.resolveAskUser(request.requestId, { behavior: 'deny' });
