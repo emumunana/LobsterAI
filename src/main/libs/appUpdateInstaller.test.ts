@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
 
 const cpMocks = vi.hoisted(() => ({
   exec: vi.fn(),
+  execFile: vi.fn(),
   spawn: vi.fn(),
 }));
 
@@ -38,13 +39,19 @@ vi.mock('child_process', async (importOriginal) => {
   return {
     ...actual,
     exec: cpMocks.exec,
+    execFile: cpMocks.execFile,
     spawn: cpMocks.spawn,
   };
 });
 
 import {
+  buildMacSwapInstallCommand,
+  buildMacSwapPaths,
   findAttachedDevEntries,
   installUpdate,
+  MAC_SWAP_BACKUP_INFIX,
+  MAC_SWAP_ROLLED_BACK_EXIT_CODE,
+  MAC_SWAP_STAGING_INFIX,
   parseHdiutilAttachOutput,
 } from './appUpdateInstaller';
 
@@ -178,11 +185,53 @@ describe('hdiutil plist parsing', () => {
   });
 });
 
+describe('mac swap builders', () => {
+  test('places staging and backup next to the target app, hidden and not .app-suffixed', () => {
+    const swapPaths = buildMacSwapPaths('/Applications/Lobster AI.app', 1234);
+
+    expect(path.dirname(swapPaths.staging)).toBe('/Applications');
+    expect(path.dirname(swapPaths.backup)).toBe('/Applications');
+    expect(path.basename(swapPaths.staging)).toBe(`.Lobster AI.app${MAC_SWAP_STAGING_INFIX}1234`);
+    expect(path.basename(swapPaths.backup)).toBe(`.Lobster AI.app${MAC_SWAP_BACKUP_INFIX}1234`);
+    expect(swapPaths.staging.endsWith('.app')).toBe(false);
+    expect(swapPaths.backup.endsWith('.app')).toBe(false);
+  });
+
+  test('builds a staged-copy, guarded-backup, rollback and cleanup sequence', () => {
+    const target = '/Applications/LobsterAI.app';
+    const swapPaths = buildMacSwapPaths(target, 7);
+
+    const cmd = buildMacSwapInstallCommand('/Volumes/LobsterAI/LobsterAI.app', target, swapPaths);
+
+    const cpIndex = cmd.indexOf(`cp -R '/Volumes/LobsterAI/LobsterAI.app' '${swapPaths.staging}'`);
+    const backupIndex = cmd.indexOf(`mv '${target}' '${swapPaths.backup}'`);
+    const swapIndex = cmd.indexOf(`mv '${swapPaths.staging}' '${target}'`);
+    const rollbackIndex = cmd.indexOf(`mv '${swapPaths.backup}' '${target}'`);
+    expect(cpIndex).toBe(0);
+    expect(backupIndex).toBeGreaterThan(cpIndex);
+    expect(swapIndex).toBeGreaterThan(backupIndex);
+    expect(rollbackIndex).toBeGreaterThan(swapIndex);
+    expect(cmd).toContain(`exit ${MAC_SWAP_ROLLED_BACK_EXIT_CODE}`);
+    expect(cmd).toContain(`[ ! -e '${target}' ]`);
+    expect(cmd).toContain(`rm -rf '${swapPaths.backup}'`);
+  });
+
+  test('single-quotes paths containing spaces and quotes', () => {
+    const target = `/Applications/It's "Lobster".app`;
+    const swapPaths = buildMacSwapPaths(target, 7);
+
+    const cmd = buildMacSwapInstallCommand('/Volumes/src.app', target, swapPaths);
+
+    expect(cmd).toContain(`'/Applications/It'\\''s "Lobster".app'`);
+  });
+});
+
 describe('macOS DMG install', () => {
   const originalPlatform = process.platform;
   const originalResourcesPath = (process as { resourcesPath?: string }).resourcesPath;
   const USER_DATA = '/Users/test/Library/Application Support/LobsterAI';
   const DMG_PATH = `${USER_DATA}/updates/lobsterai-update-auto-1.dmg`;
+  const TARGET_APP = '/Applications/LobsterAI.app';
 
   const attachNoMountJson = JSON.stringify({
     'system-entities': [
@@ -203,12 +252,37 @@ describe('macOS DMG install', () => {
   let attachResponders: Array<(cmd: string) => string>;
   let attachCommands: string[];
   let detachCommands: string[];
+  /** Every command passed to exec, in call order. */
+  let execCommands: string[];
+  /** Per-test hook to fail or answer specific commands; undefined falls through to defaults. */
+  let execOverride: ((cmd: string) => { error?: Error; stdout?: string } | undefined) | null;
+  /** readdir result for the target app's parent directory. */
+  let applicationsEntries: string[];
 
   const respondNoMount = () => attachNoMountJson;
   const respondMountedAtVolumes = () => attachMountedJson('/Volumes/LobsterAI');
   const respondMountedAtRequestedPoint = (cmd: string) => {
     const match = cmd.match(/-mountpoint '([^']+)'/);
     return attachMountedJson(match ? match[1] : '/Volumes/unexpected');
+  };
+
+  const isSwapInCommand = (cmd: string) =>
+    cmd.startsWith('mv ') && cmd.includes(MAC_SWAP_STAGING_INFIX) && cmd.endsWith(`'${TARGET_APP}'`);
+  const isRollbackCommand = (cmd: string) =>
+    cmd.startsWith('mv ') && cmd.includes(MAC_SWAP_BACKUP_INFIX) && cmd.endsWith(`'${TARGET_APP}'`);
+
+  const failPrivilegedInstall = (message: string) => {
+    cpMocks.execFile.mockImplementation(
+      (
+        _file: string,
+        _args: string[],
+        _opts: unknown,
+        callback: (error: Error | null, stdout: string, stderr: string) => void,
+      ) => {
+        setImmediate(() => callback(new Error(message), '', ''));
+        return {} as never;
+      },
+    );
   };
 
   /** plutil stand-in that echoes stdin, so exec fixtures can be JSON directly. */
@@ -240,17 +314,21 @@ describe('macOS DMG install', () => {
     mocks.getPath.mockReset();
     mocks.getPath.mockReturnValue(USER_DATA);
     cpMocks.exec.mockReset();
+    cpMocks.execFile.mockReset();
     cpMocks.spawn.mockReset();
 
     Object.defineProperty(process, 'platform', { value: 'darwin' });
     Object.defineProperty(process, 'resourcesPath', {
-      value: '/Applications/LobsterAI.app/Contents/Resources',
+      value: `${TARGET_APP}/Contents/Resources`,
       configurable: true,
     });
 
     attachResponders = [];
     attachCommands = [];
     detachCommands = [];
+    execCommands = [];
+    execOverride = null;
+    applicationsEntries = ['LobsterAI.app'];
 
     cpMocks.exec.mockImplementation(
       (
@@ -258,29 +336,51 @@ describe('macOS DMG install', () => {
         _opts: unknown,
         callback: (error: Error | null, stdout: string, stderr: string) => void,
       ) => {
-        const respond = (stdout: string) => setImmediate(() => callback(null, stdout, ''));
-        if (cmd.startsWith('hdiutil attach')) {
+        execCommands.push(cmd);
+        const finish = (error: Error | null, stdout = '') =>
+          setImmediate(() => callback(error, stdout, ''));
+        const override = execOverride?.(cmd);
+        if (override) {
+          finish(override.error ?? null, override.stdout ?? '');
+        } else if (cmd.startsWith('hdiutil attach')) {
           attachCommands.push(cmd);
           const responder = attachResponders.shift() ?? respondNoMount;
-          respond(responder(cmd));
+          finish(null, responder(cmd));
         } else if (cmd.startsWith('hdiutil detach')) {
           detachCommands.push(cmd);
-          respond('');
+          finish(null, '');
         } else {
-          respond('');
+          finish(null, '');
         }
+        return {} as never;
+      },
+    );
+    cpMocks.execFile.mockImplementation(
+      (
+        _file: string,
+        _args: string[],
+        _opts: unknown,
+        callback: (error: Error | null, stdout: string, stderr: string) => void,
+      ) => {
+        setImmediate(() => callback(null, '', ''));
         return {} as never;
       },
     );
     cpMocks.spawn.mockImplementation(() => fakePlutilProcess() as never);
 
     vi.spyOn(fs.promises, 'stat').mockResolvedValue({ size: 1024 } as fs.Stats);
+    vi.spyOn(fs.promises, 'lstat').mockResolvedValue({} as fs.Stats);
     vi.spyOn(fs.promises, 'mkdir').mockResolvedValue(undefined);
     vi.spyOn(fs.promises, 'unlink').mockResolvedValue(undefined);
     vi.spyOn(fs.promises, 'rmdir').mockResolvedValue(undefined);
+    vi.spyOn(fs.promises, 'rm').mockResolvedValue(undefined);
     vi.spyOn(fs.promises, 'readdir').mockImplementation(((dir: fs.PathLike) => {
-      if (String(dir).endsWith(path.join('Contents', 'MacOS'))) {
+      const dirPath = String(dir);
+      if (dirPath.endsWith(path.join('Contents', 'MacOS'))) {
         return Promise.resolve(['LobsterAI']);
+      }
+      if (dirPath === path.dirname(TARGET_APP)) {
+        return Promise.resolve(applicationsEntries);
       }
       return Promise.resolve(['LobsterAI.app']);
     }) as never);
@@ -295,7 +395,7 @@ describe('macOS DMG install', () => {
     vi.restoreAllMocks();
   });
 
-  test('mounts, copies and relaunches on the happy path', async () => {
+  test('mounts, swap-installs and relaunches on the happy path', async () => {
     attachResponders = [respondMountedAtVolumes];
 
     await installUpdate(DMG_PATH);
@@ -303,9 +403,30 @@ describe('macOS DMG install', () => {
     expect(attachCommands).toHaveLength(1);
     expect(attachCommands[0]).toContain('-plist');
     expect(attachCommands[0]).not.toContain('-mountpoint');
+
+    // Staged copy runs first, then backup move, then the swap-in rename.
+    const cpIndex = execCommands.findIndex(
+      (cmd) => cmd.startsWith('cp -R') && cmd.includes(MAC_SWAP_STAGING_INFIX),
+    );
+    const backupIndex = execCommands.findIndex(
+      (cmd) => cmd.startsWith(`mv '${TARGET_APP}'`) && cmd.includes(MAC_SWAP_BACKUP_INFIX),
+    );
+    const swapIndex = execCommands.findIndex(isSwapInCommand);
+    expect(cpIndex).toBeGreaterThanOrEqual(0);
+    expect(backupIndex).toBeGreaterThan(cpIndex);
+    expect(swapIndex).toBeGreaterThan(backupIndex);
+    // The destructive rm -rf of the old install is gone; the backup is
+    // removed via fs.rm only after the new version is in place.
+    expect(execCommands.some((cmd) => cmd.startsWith('rm -rf'))).toBe(false);
+    expect(fs.promises.rm).toHaveBeenCalledWith(
+      expect.stringContaining(MAC_SWAP_BACKUP_INFIX),
+      { recursive: true, force: true },
+    );
+
     expect(detachCommands).toHaveLength(1);
     expect(detachCommands[0]).toContain('/Volumes/LobsterAI');
     expect(fs.promises.unlink).toHaveBeenCalledWith(DMG_PATH);
+    expect(cpMocks.execFile).not.toHaveBeenCalled();
     expect(mocks.relaunch).toHaveBeenCalledOnce();
     expect(mocks.quit).toHaveBeenCalledOnce();
     expect(mocks.openPath).not.toHaveBeenCalled();
@@ -356,33 +477,127 @@ describe('macOS DMG install', () => {
     expect(mocks.showItemInFolder).toHaveBeenCalledWith(DMG_PATH);
   });
 
-  test('detaches the image when the copy step fails', async () => {
+  test('leaves the current app untouched when the staging copy fails everywhere', async () => {
     attachResponders = [respondMountedAtVolumes];
-    cpMocks.exec.mockImplementation(
-      (
-        cmd: string,
-        _opts: unknown,
-        callback: (error: Error | null, stdout: string, stderr: string) => void,
-      ) => {
-        const respond = (err: Error | null, stdout: string) =>
-          setImmediate(() => callback(err, stdout, ''));
-        if (cmd.startsWith('hdiutil attach')) {
-          attachCommands.push(cmd);
-          respond(null, respondMountedAtVolumes());
-        } else if (cmd.startsWith('hdiutil detach')) {
-          detachCommands.push(cmd);
-          respond(null, '');
-        } else {
-          // Both the plain copy and the osascript admin fallback fail.
-          respond(new Error('copy failed'), '');
-        }
-        return {} as never;
-      },
+    execOverride = (cmd) =>
+      cmd.startsWith('cp -R') ? { error: new Error('No space left on device') } : undefined;
+    failPrivilegedInstall('execution error: User canceled. (-128)');
+
+    await expect(installUpdate(DMG_PATH)).rejects.toThrow(
+      /insufficient permissions[\s\S]*current version untouched/,
     );
 
-    await expect(installUpdate(DMG_PATH)).rejects.toThrow('insufficient permissions');
-
+    // The current install is never moved or deleted.
+    expect(execCommands.some((cmd) => cmd.startsWith(`mv '${TARGET_APP}'`))).toBe(false);
+    expect(execCommands.some((cmd) => cmd.startsWith('rm -rf'))).toBe(false);
+    // The failed staging copy is cleaned up.
+    expect(fs.promises.rm).toHaveBeenCalledWith(
+      expect.stringContaining(MAC_SWAP_STAGING_INFIX),
+      { recursive: true, force: true },
+    );
+    // The image is detached on failure.
     expect(detachCommands.length).toBeGreaterThan(0);
     expect(mocks.quit).not.toHaveBeenCalled();
+  });
+
+  test('rolls back the backup and retries with privileges when the swap-in fails', async () => {
+    attachResponders = [respondMountedAtVolumes];
+    execOverride = (cmd) => (isSwapInCommand(cmd) ? { error: new Error('swap blocked') } : undefined);
+
+    await installUpdate(DMG_PATH);
+
+    const swapIndex = execCommands.findIndex(isSwapInCommand);
+    const rollbackIndex = execCommands.findIndex(isRollbackCommand);
+    expect(swapIndex).toBeGreaterThanOrEqual(0);
+    expect(rollbackIndex).toBeGreaterThan(swapIndex);
+    expect(cpMocks.execFile).toHaveBeenCalledOnce();
+    expect(mocks.relaunch).toHaveBeenCalledOnce();
+    expect(mocks.quit).toHaveBeenCalledOnce();
+  });
+
+  test('reports rolled back when the privileged swap also fails after a rollback', async () => {
+    attachResponders = [respondMountedAtVolumes];
+    execOverride = (cmd) => (isSwapInCommand(cmd) ? { error: new Error('swap blocked') } : undefined);
+    failPrivilegedInstall(
+      `execution error: 该命令退出时状态为非零。 (${MAC_SWAP_ROLLED_BACK_EXIT_CODE})`,
+    );
+
+    await expect(installUpdate(DMG_PATH)).rejects.toThrow(/rolled back to current version/);
+
+    expect(mocks.quit).not.toHaveBeenCalled();
+  });
+
+  test('skips the backup step when no app exists at the target path', async () => {
+    attachResponders = [respondMountedAtVolumes];
+    const enoent = Object.assign(new Error('not found'), { code: 'ENOENT' });
+    vi.mocked(fs.promises.lstat).mockRejectedValue(enoent);
+
+    await installUpdate(DMG_PATH);
+
+    expect(execCommands.some((cmd) => cmd.startsWith(`mv '${TARGET_APP}'`))).toBe(false);
+    expect(execCommands.findIndex(isSwapInCommand)).toBeGreaterThanOrEqual(0);
+    expect(mocks.quit).toHaveBeenCalledOnce();
+  });
+
+  test('surfaces the backup path when the rollback itself fails', async () => {
+    attachResponders = [respondMountedAtVolumes];
+    execOverride = (cmd) => {
+      if (isSwapInCommand(cmd)) {
+        return { error: new Error('swap blocked') };
+      }
+      if (isRollbackCommand(cmd)) {
+        return { error: new Error('rollback blocked') };
+      }
+      return undefined;
+    };
+
+    await expect(installUpdate(DMG_PATH)).rejects.toThrow(
+      /previous version preserved at .*\.backup-/,
+    );
+
+    // No privileged retry on a stranded backup: the filesystem state is unexpected.
+    expect(cpMocks.execFile).not.toHaveBeenCalled();
+    expect(mocks.quit).not.toHaveBeenCalled();
+  });
+
+  test('cleans up leftover staging and backup directories before installing', async () => {
+    attachResponders = [respondMountedAtVolumes];
+    applicationsEntries = [
+      `.LobsterAI.app${MAC_SWAP_STAGING_INFIX}1`,
+      `.LobsterAI.app${MAC_SWAP_BACKUP_INFIX}2`,
+      'LobsterAI.app',
+      'Other.app',
+    ];
+
+    await installUpdate(DMG_PATH);
+
+    expect(fs.promises.rm).toHaveBeenCalledWith(
+      `/Applications/.LobsterAI.app${MAC_SWAP_STAGING_INFIX}1`,
+      { recursive: true, force: true },
+    );
+    expect(fs.promises.rm).toHaveBeenCalledWith(
+      `/Applications/.LobsterAI.app${MAC_SWAP_BACKUP_INFIX}2`,
+      { recursive: true, force: true },
+    );
+    expect(fs.promises.rm).not.toHaveBeenCalledWith('/Applications/Other.app', expect.anything());
+    expect(mocks.quit).toHaveBeenCalledOnce();
+  });
+
+  test('passes the composite swap command to osascript for the privileged path', async () => {
+    attachResponders = [respondMountedAtVolumes];
+    execOverride = (cmd) =>
+      cmd.startsWith('cp -R') ? { error: new Error('Operation not permitted') } : undefined;
+
+    await installUpdate(DMG_PATH);
+
+    expect(cpMocks.execFile).toHaveBeenCalledOnce();
+    const [file, args] = cpMocks.execFile.mock.calls[0] as [string, string[]];
+    expect(file).toBe('osascript');
+    expect(args[0]).toBe('-e');
+    expect(args[1]).toContain('do shell script "');
+    expect(args[1]).toContain('with administrator privileges');
+    expect(args[1]).toContain('cp -R ');
+    expect(args[1]).toContain(`exit ${MAC_SWAP_ROLLED_BACK_EXIT_CODE}`);
+    expect(mocks.quit).toHaveBeenCalledOnce();
   });
 });

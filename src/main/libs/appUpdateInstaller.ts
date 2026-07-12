@@ -1,4 +1,4 @@
-import { exec, spawn } from 'child_process';
+import { exec, execFile, spawn } from 'child_process';
 import { app, session, shell } from 'electron';
 import fs from 'fs';
 import path from 'path';
@@ -442,6 +442,277 @@ async function removeMountDirBestEffort(dir: string | null): Promise<void> {
   await fs.promises.rmdir(dir).catch(() => {});
 }
 
+/** Timeout for each copy/move step of the swap install (ms). */
+const APP_SWAP_STEP_TIMEOUT_MS = 300_000;
+
+/** Name fragments of the hidden swap directories placed next to the target app. */
+export const MAC_SWAP_STAGING_INFIX = '.staging-';
+export const MAC_SWAP_BACKUP_INFIX = '.backup-';
+
+/**
+ * Exit code the privileged swap command uses to signal "swap failed but the
+ * previous version was restored". osascript does not propagate the inner exit
+ * code as its own (it exits 1 with a localized message), so callers recognize
+ * it from the trailing `(90)` AppleScript error number in stderr.
+ */
+export const MAC_SWAP_ROLLED_BACK_EXIT_CODE = 90;
+
+export interface MacSwapPaths {
+  staging: string;
+  backup: string;
+}
+
+/**
+ * Staging and backup live next to the target app: rename(2) is only atomic
+ * within one filesystem, and sharing the parent directory is the reliable way
+ * to stay on the target's volume (the app may live outside /Applications).
+ * The leading dot hides them in Finder, and the names do not end in ".app" so
+ * LaunchServices ignores them.
+ */
+export function buildMacSwapPaths(targetApp: string, timestamp: number): MacSwapPaths {
+  const dir = path.dirname(targetApp);
+  const base = path.basename(targetApp);
+  return {
+    staging: path.join(dir, `.${base}${MAC_SWAP_STAGING_INFIX}${timestamp}`),
+    backup: path.join(dir, `.${base}${MAC_SWAP_BACKUP_INFIX}${timestamp}`),
+  };
+}
+
+/**
+ * Composite sequence for the privileged path, which must be a single shell
+ * command: every `do shell script … with administrator privileges` call shows
+ * its own password prompt. Rollback is embedded — a failed swap-in restores
+ * the backup and exits with MAC_SWAP_ROLLED_BACK_EXIT_CODE. The `[ ! -e … ]`
+ * guards cover a missing target app (fresh install fallback).
+ */
+export function buildMacSwapInstallCommand(
+  sourceApp: string,
+  targetApp: string,
+  swapPaths: MacSwapPaths,
+): string {
+  const src = shellEscape(sourceApp);
+  const tgt = shellEscape(targetApp);
+  const stg = shellEscape(swapPaths.staging);
+  const bak = shellEscape(swapPaths.backup);
+  return (
+    `cp -R ${src} ${stg}` +
+    ` && { [ ! -e ${tgt} ] || mv ${tgt} ${bak}; }` +
+    ` && { mv ${stg} ${tgt} || { [ ! -e ${bak} ] || mv ${bak} ${tgt}; exit ${MAC_SWAP_ROLLED_BACK_EXIT_CODE}; }; }` +
+    ` && { [ ! -e ${bak} ] || rm -rf ${bak}; }`
+  );
+}
+
+function execFileAsync(file: string, args: string[], timeoutMs: number): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(file, args, { maxBuffer: 10 * 1024 * 1024, timeout: timeoutMs }, (error, stdout, stderr) => {
+      if (error) {
+        reject(new Error(`${error.message}\nstderr: ${stderr}`));
+      } else {
+        resolve(stdout.trim());
+      }
+    });
+  });
+}
+
+/**
+ * Escape for an AppleScript string literal. `$` and backtick must NOT be
+ * escaped here: the swap command wraps paths in single quotes, and AppleScript
+ * passes unknown escapes like `\$` through with the backslash intact, which
+ * would corrupt the path inside those quotes.
+ */
+const escapeForAppleScriptString = (s: string) => s.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+
+async function runPrivilegedSwapInstall(sourceApp: string, targetApp: string): Promise<void> {
+  // Fresh timestamp: `cp -R` into an existing directory copies the source
+  // inside it, so staging names are never reused across attempts.
+  const swapPaths = buildMacSwapPaths(targetApp, Date.now());
+  const command = buildMacSwapInstallCommand(sourceApp, targetApp, swapPaths);
+  // argv array (no outer shell): the command contains single quotes from
+  // shellEscape, which an `osascript -e '…'` shell wrapper could not carry.
+  await execFileAsync(
+    'osascript',
+    ['-e', `do shell script "${escapeForAppleScriptString(command)}" with administrator privileges`],
+    APP_SWAP_STEP_TIMEOUT_MS,
+  );
+}
+
+/** Whether a failed privileged swap reported "previous version restored". */
+function isPrivilegedSwapRolledBack(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes(`(${MAC_SWAP_ROLLED_BACK_EXIT_CODE})`);
+}
+
+type SwapFailureOutcome = 'untouched' | 'rolled-back' | 'backup-stranded';
+
+class SwapInstallError extends Error {
+  readonly outcome: SwapFailureOutcome;
+  readonly backupPath?: string;
+
+  constructor(message: string, outcome: SwapFailureOutcome, backupPath?: string) {
+    super(message);
+    this.outcome = outcome;
+    this.backupPath = backupPath;
+  }
+}
+
+async function pathExists(targetPath: string): Promise<boolean> {
+  try {
+    await fs.promises.lstat(targetPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function removeDirBestEffort(dir: string): Promise<void> {
+  try {
+    await fs.promises.rm(dir, { recursive: true, force: true });
+  } catch (error) {
+    console.warn(`[AppUpdate] failed to remove ${dir}:`, error);
+  }
+}
+
+/**
+ * Remove leftover staging/backup directories from earlier attempts. `cp -R`
+ * into an existing staging directory would nest the copy inside it, and
+ * leftovers would otherwise accumulate forever. Best effort: a root-owned
+ * leftover from a failed privileged attempt may survive, which is harmless
+ * (hidden directory, disk space only).
+ */
+async function cleanupSwapLeftovers(targetApp: string): Promise<void> {
+  const targetDir = path.dirname(targetApp);
+  const base = path.basename(targetApp);
+  const prefixes = [`.${base}${MAC_SWAP_STAGING_INFIX}`, `.${base}${MAC_SWAP_BACKUP_INFIX}`];
+  let entries: string[];
+  try {
+    entries = await fs.promises.readdir(targetDir);
+  } catch (error) {
+    console.warn('[AppUpdate] failed to scan for swap leftovers:', error);
+    return;
+  }
+  for (const entry of entries) {
+    if (!prefixes.some((prefix) => entry.startsWith(prefix))) {
+      continue;
+    }
+    const leftover = path.join(targetDir, entry);
+    console.log(`[AppUpdate] removing swap leftover: ${leftover}`);
+    await removeDirBestEffort(leftover);
+  }
+}
+
+/**
+ * Stage-copy the new app next to the target, then swap it in with atomic
+ * renames, keeping a backup of the current install until the new one is in
+ * place. The copy — the step most likely to fail (300+ MB, disk space) — runs
+ * before the current install is touched; the previous `rm -rf && cp -R`
+ * sequence deleted the user's app before the copy had succeeded.
+ */
+async function swapInstallWithUserPerms(sourceApp: string, targetApp: string): Promise<void> {
+  const { staging, backup } = buildMacSwapPaths(targetApp, Date.now());
+
+  console.log(`[AppUpdate] Copying app bundle to staging: ${staging}`);
+  try {
+    await execAsync(
+      `cp -R ${shellEscape(sourceApp)} ${shellEscape(staging)}`,
+      APP_SWAP_STEP_TIMEOUT_MS,
+    );
+  } catch (error) {
+    await removeDirBestEffort(staging);
+    throw new SwapInstallError(
+      `staging copy failed: ${error instanceof Error ? error.message : String(error)}`,
+      'untouched',
+    );
+  }
+
+  let backupCreated = false;
+  if (await pathExists(targetApp)) {
+    console.log(`[AppUpdate] Moving current app to backup: ${backup}`);
+    try {
+      await execAsync(`mv ${shellEscape(targetApp)} ${shellEscape(backup)}`, APP_SWAP_STEP_TIMEOUT_MS);
+      backupCreated = true;
+    } catch (error) {
+      await removeDirBestEffort(staging);
+      throw new SwapInstallError(
+        `backup move failed: ${error instanceof Error ? error.message : String(error)}`,
+        'untouched',
+      );
+    }
+  }
+
+  console.log('[AppUpdate] Swapping staged app into place...');
+  try {
+    await execAsync(`mv ${shellEscape(staging)} ${shellEscape(targetApp)}`, APP_SWAP_STEP_TIMEOUT_MS);
+  } catch (error) {
+    const swapMessage = error instanceof Error ? error.message : String(error);
+    if (backupCreated) {
+      try {
+        await execAsync(`mv ${shellEscape(backup)} ${shellEscape(targetApp)}`, APP_SWAP_STEP_TIMEOUT_MS);
+        console.warn('[AppUpdate] swap-in failed, previous version restored');
+      } catch (rollbackError) {
+        console.error(
+          `[AppUpdate] rollback failed, previous version preserved at: ${backup}`,
+          rollbackError,
+        );
+        await removeDirBestEffort(staging);
+        throw new SwapInstallError(
+          `swap-in failed and rollback failed: ${swapMessage}`,
+          'backup-stranded',
+          backup,
+        );
+      }
+    }
+    await removeDirBestEffort(staging);
+    throw new SwapInstallError(
+      `swap-in failed: ${swapMessage}`,
+      backupCreated ? 'rolled-back' : 'untouched',
+    );
+  }
+
+  if (backupCreated) {
+    // The new version is already in place; a surviving backup is swept by the
+    // next install's leftover cleanup.
+    await removeDirBestEffort(backup);
+  }
+}
+
+async function swapInstallMacApp(sourceApp: string, targetApp: string): Promise<void> {
+  await cleanupSwapLeftovers(targetApp);
+
+  let normalOutcome: SwapFailureOutcome = 'untouched';
+  try {
+    await swapInstallWithUserPerms(sourceApp, targetApp);
+    console.log('[AppUpdate] Swap install succeeded');
+    return;
+  } catch (error) {
+    const swapError = error instanceof SwapInstallError ? error : null;
+    if (swapError?.outcome === 'backup-stranded') {
+      // The filesystem is in an unexpected state (target gone, old version
+      // stranded in the backup dir); retrying with privileges could make it
+      // worse, so surface the recovery path instead.
+      throw new Error(
+        `Installation failed: could not restore the current version; previous version preserved at ${swapError.backupPath}`,
+      );
+    }
+    normalOutcome = swapError?.outcome ?? 'untouched';
+    console.warn(
+      `[AppUpdate] normal swap install failed (${normalOutcome}), requesting admin privileges:`,
+      error,
+    );
+  }
+
+  try {
+    await runPrivilegedSwapInstall(sourceApp, targetApp);
+    console.log('[AppUpdate] Admin swap install succeeded');
+  } catch (adminError) {
+    const rolledBack = isPrivilegedSwapRolledBack(adminError) || normalOutcome === 'rolled-back';
+    throw new Error(
+      `Installation failed: insufficient permissions. ${
+        adminError instanceof Error ? adminError.message : ''
+      } (${rolledBack ? 'rolled back to current version' : 'current version untouched'})`,
+    );
+  }
+}
+
 async function installMacDmg(dmgPath: string): Promise<void> {
   let mountPoint: string | null = null;
   let attachedDevEntries: string[] = [];
@@ -510,33 +781,7 @@ async function installMacDmg(dmgPath: string): Promise<void> {
     }
     console.log(`[AppUpdate] Target app: ${targetApp}`);
 
-    // Try to copy the .app bundle (use shellEscape to prevent injection)
-    try {
-      console.log('[AppUpdate] Copying app bundle...');
-      await execAsync(
-        `rm -rf ${shellEscape(targetApp)} && cp -R ${shellEscape(sourceApp)} ${shellEscape(targetApp)}`,
-        300_000,
-      );
-      console.log('[AppUpdate] Copy succeeded');
-    } catch {
-      // Permission denied: try with admin privileges via osascript
-      console.log('[AppUpdate] Normal copy failed, requesting admin privileges...');
-      try {
-        // For osascript, escape backslashes and double quotes for the inner shell
-        const escapeForInnerShell = (s: string) => s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\$/g, '\\$').replace(/`/g, '\\`');
-        const escapedTarget = escapeForInnerShell(targetApp);
-        const escapedSource = escapeForInnerShell(sourceApp);
-        await execAsync(
-          `osascript -e 'do shell script "rm -rf \\"${escapedTarget}\\" && cp -R \\"${escapedSource}\\" \\"${escapedTarget}\\"" with administrator privileges'`,
-          300_000,
-        );
-        console.log('[AppUpdate] Admin copy succeeded');
-      } catch (adminError) {
-        throw new Error(
-          `Installation failed: insufficient permissions. ${adminError instanceof Error ? adminError.message : ''}`,
-        );
-      }
-    }
+    await swapInstallMacApp(sourceApp, targetApp);
 
     // Detach DMG (timeout 30s)
     try {
