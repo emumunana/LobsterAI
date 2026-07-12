@@ -478,6 +478,11 @@ contextBridge.exposeInMainWorld('electron', {
       embeddingRemoteBaseUrl?: string;
       embeddingRemoteApiKey?: string;
     }) => ipcRenderer.invoke('cowork:config:set', config),
+
+    // Session temp storage (.cowork-temp) maintenance
+    getTempStorageUsage: () => ipcRenderer.invoke(CoworkIpcChannel.TempStorageUsage),
+    cleanTempStorage: (options?: { cwds?: string[] }) =>
+      ipcRenderer.invoke(CoworkIpcChannel.TempStorageClean, options),
     listMemoryEntries: (input: {
       query?: string;
       status?: 'created' | 'stale' | 'deleted' | 'all';

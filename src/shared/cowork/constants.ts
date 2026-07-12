@@ -12,6 +12,20 @@ export const COWORK_SESSION_PAGE_SIZE = 50;
 /** Default page size for message history pagination. */
 export const COWORK_MESSAGE_PAGE_SIZE = 30;
 
+/**
+ * Per-working-directory scratch directory for intermediate files (model
+ * helper scripts, pasted attachments, drafts). Swept by the cowork temp
+ * janitor; user-facing deliverables must not live here.
+ */
+export const COWORK_TEMP_DIR_NAME = '.cowork-temp';
+
+/**
+ * Subdirectory of the cowork temp dir holding pasted/manual attachments.
+ * Attachment originals are referenced by message metadata (re-edit restores
+ * them), so the janitor never deletes this subtree.
+ */
+export const COWORK_TEMP_ATTACHMENTS_DIR_NAME = 'attachments';
+
 export const CoworkIpcChannel = {
   MediaStatusPollUpdate: 'cowork:media:statusPollUpdate',
   ForkSession: 'cowork:session:fork',
@@ -32,6 +46,8 @@ export const CoworkIpcChannel = {
   MemoryWriteRaw: 'cowork:memory:writeRaw',
   BootstrapRead: 'cowork:bootstrap:read',
   BootstrapWrite: 'cowork:bootstrap:write',
+  TempStorageUsage: 'cowork:tempStorage:usage',
+  TempStorageClean: 'cowork:tempStorage:clean',
 } as const;
 export type CoworkIpcChannel = typeof CoworkIpcChannel[keyof typeof CoworkIpcChannel];
 

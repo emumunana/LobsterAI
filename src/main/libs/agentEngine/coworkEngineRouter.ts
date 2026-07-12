@@ -157,6 +157,11 @@ export class CoworkEngineRouter extends EventEmitter implements CoworkRuntime {
     return this.runtime.isSessionActive(sessionId);
   }
 
+  getActiveSessionIds(): string[] {
+    return Array.from(this.sessionEngine.keys())
+      .filter((sessionId) => this.runtime.isSessionActive(sessionId));
+  }
+
   getSessionConfirmationMode(sessionId: string): 'modal' | 'text' | null {
     return this.runtime.getSessionConfirmationMode(sessionId);
   }

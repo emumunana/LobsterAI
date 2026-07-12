@@ -200,6 +200,7 @@ const AssistantTurnBlock: React.FC<{
   localServiceDirectory?: string;
   onOpenLocalService?: (artifact: Artifact) => void;
   onOpenHtmlFile?: (artifact: Artifact) => void;
+  onOpenArtifactPreview?: (artifact: Artifact) => void;
   onForkMessage?: (messageId: string) => void;
   planConfirmationMessageId?: string | null;
   onConfirmPlan?: (messageId: string) => void;
@@ -216,6 +217,7 @@ const AssistantTurnBlock: React.FC<{
   localServiceDirectory,
   onOpenLocalService,
   onOpenHtmlFile,
+  onOpenArtifactPreview,
   onForkMessage,
   planConfirmationMessageId,
   onConfirmPlan,
@@ -483,6 +485,7 @@ const AssistantTurnBlock: React.FC<{
                         localServiceDirectory={localServiceDirectory}
                         onOpenLocalService={onOpenLocalService}
                         onOpenHtmlFile={onOpenHtmlFile}
+                        onOpenPreview={onOpenArtifactPreview}
                       />
                     ))}
                   </div>

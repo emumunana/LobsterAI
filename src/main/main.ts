@@ -51,6 +51,8 @@ import { ClipboardIpc } from '../shared/clipboard/constants';
 import {
   COWORK_MESSAGE_PAGE_SIZE,
   COWORK_SESSION_PAGE_SIZE,
+  COWORK_TEMP_ATTACHMENTS_DIR_NAME,
+  COWORK_TEMP_DIR_NAME,
   CoworkContextUsageFailureReason,
   CoworkContextUsageSource,
   CoworkForkMode,
@@ -198,6 +200,12 @@ import {
   startCoworkOpenAICompatProxy,
   stopCoworkOpenAICompatProxy,
 } from './libs/coworkOpenAICompatProxy';
+import {
+  type CoworkTempJanitor,
+  createCoworkTempJanitor,
+  ensureCoworkTempGitignore,
+  findCoworkTempRoot,
+} from './libs/coworkTempJanitor';
 import {
   generateSessionTitle,
   probeCoworkModelReadiness,
@@ -1145,7 +1153,7 @@ const resolveInlineAttachmentDir = (cwd?: string): string => {
   if (trimmed) {
     const resolved = path.resolve(trimmed);
     if (fs.existsSync(resolved) && fs.statSync(resolved).isDirectory()) {
-      return path.join(resolved, '.cowork-temp', 'attachments', 'manual');
+      return path.join(resolved, COWORK_TEMP_DIR_NAME, COWORK_TEMP_ATTACHMENTS_DIR_NAME, 'manual');
     }
   }
   return path.join(app.getPath('temp'), 'lobsterai', 'attachments');
@@ -2605,6 +2613,26 @@ const getCoworkEngineRouter = () => {
     });
   }
   return coworkEngineRouter;
+};
+
+let coworkTempJanitor: CoworkTempJanitor | null = null;
+
+const getCoworkTempJanitor = (): CoworkTempJanitor => {
+  if (!coworkTempJanitor) {
+    coworkTempJanitor = createCoworkTempJanitor({
+      listAllCwds: () => getCoworkStore().listRecentSessionCwds(0),
+      listActiveCwds: () => {
+        try {
+          const activeSessionIds = getCoworkEngineRouter().getActiveSessionIds();
+          return getCoworkStore().listSessionCwds(activeSessionIds);
+        } catch (error) {
+          console.warn('[CoworkTempJanitor] failed to resolve active session cwds:', error);
+          return [];
+        }
+      },
+    });
+  }
+  return coworkTempJanitor;
 };
 
 const getTaskCompletionNotifier = (): TaskCompletionNotifier => {
@@ -7301,6 +7329,36 @@ if (!gotTheLock) {
     }
   });
 
+  ipcMain.handle(CoworkIpcChannel.TempStorageUsage, async () => {
+    try {
+      const preview = await getCoworkTempJanitor().preview();
+      return { success: true, ...preview };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to measure temp storage',
+      };
+    }
+  });
+
+  ipcMain.handle(
+    CoworkIpcChannel.TempStorageClean,
+    async (_event, options?: { cwds?: string[] }) => {
+      try {
+        const selectedCwds = Array.isArray(options?.cwds)
+          ? options.cwds.filter((cwd): cwd is string => typeof cwd === 'string' && cwd.trim() !== '')
+          : undefined;
+        const summary = await getCoworkTempJanitor().clean(selectedCwds);
+        return { success: true, ...summary };
+      } catch (error) {
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : 'Failed to clean temp storage',
+        };
+      }
+    },
+  );
+
   ipcMain.handle(OpenClawSessionPolicyIpc.Get, async () => {
     try {
       const config = loadOpenClawSessionPolicyConfig(getStore());
@@ -9222,6 +9280,10 @@ if (!gotTheLock) {
 
         const dir = resolveInlineAttachmentDir(options?.cwd);
         await fs.promises.mkdir(dir, { recursive: true });
+        const coworkTempRoot = findCoworkTempRoot(dir);
+        if (coworkTempRoot) {
+          ensureCoworkTempGitignore(coworkTempRoot);
+        }
 
         const safeFileName = sanitizeAttachmentFileName(options?.fileName);
         const extension = inferAttachmentExtension(safeFileName, options?.mimeType);
