@@ -31,6 +31,7 @@ import { setAvailableModels } from '../store/slices/modelSlice';
 import type {
   CoworkAgentEngine,
   CoworkMemoryStats,
+  CoworkTempDirPreview,
   CoworkUserMemoryEntry,
   OpenClawEngineStatus,
   OpenClawGatewayRepairResult,
@@ -1654,6 +1655,14 @@ const Settings: React.FC<SettingsProps> = ({
   const [coworkMemoryEnabled, setCoworkMemoryEnabled] = useState<boolean>(coworkConfig.memoryEnabled ?? true);
   const [coworkMemoryLlmJudgeEnabled, setCoworkMemoryLlmJudgeEnabled] = useState<boolean>(coworkConfig.memoryLlmJudgeEnabled ?? false);
   const [skipMissedJobs, setSkipMissedJobs] = useState<boolean>(coworkConfig.skipMissedJobs ?? true);
+  const [tempStorageUsageBytes, setTempStorageUsageBytes] = useState<number | null>(null);
+  const [tempStorageCleanableBytes, setTempStorageCleanableBytes] = useState<number | null>(null);
+  const [isCleaningTempStorage, setIsCleaningTempStorage] = useState<boolean>(false);
+  const [tempStorageCleanResult, setTempStorageCleanResult] = useState<string | null>(null);
+  const [isLoadingTempCleanPreview, setIsLoadingTempCleanPreview] = useState<boolean>(false);
+  const [tempCleanPreviewDirs, setTempCleanPreviewDirs] = useState<CoworkTempDirPreview[]>([]);
+  const [tempCleanSelection, setTempCleanSelection] = useState<Record<string, boolean>>({});
+  const [showTempCleanConfirm, setShowTempCleanConfirm] = useState<boolean>(false);
   const [openClawHeartbeatEnabled, setOpenClawHeartbeatEnabled] = useState<boolean>(coworkConfig.openClawHeartbeatEnabled ?? true);
   const [embeddingEnabled, setEmbeddingEnabled] = useState<boolean>(coworkConfig.embeddingEnabled ?? false);
   const [embeddingProvider, setEmbeddingProvider] = useState<string>(coworkConfig.embeddingProvider ?? 'openai');
@@ -1728,6 +1737,90 @@ const Settings: React.FC<SettingsProps> = ({
     coworkConfig.dreamingModel,
     coworkConfig.dreamingTimezone,
   ]);
+
+  const refreshTempStorageUsage = useCallback(async () => {
+    try {
+      const result = await window.electron?.cowork?.getTempStorageUsage();
+      if (result?.success) {
+        setTempStorageUsageBytes(result.bytes ?? 0);
+        setTempStorageCleanableBytes(result.cleanableBytes ?? 0);
+      }
+    } catch (err) {
+      console.debug('Failed to measure cowork temp storage:', err);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeTab !== 'general') return;
+    void refreshTempStorageUsage();
+  }, [activeTab, refreshTempStorageUsage]);
+
+  // Opens the guardian-style confirmation dialog: scan first, show exactly
+  // what would be removed per directory, and only delete what the user
+  // confirms.
+  const handleOpenTempCleanConfirm = useCallback(async () => {
+    if (isLoadingTempCleanPreview || isCleaningTempStorage) return;
+    setIsLoadingTempCleanPreview(true);
+    setTempStorageCleanResult(null);
+    try {
+      const result = await window.electron?.cowork?.getTempStorageUsage();
+      if (!result?.success) {
+        setTempStorageCleanResult(i18nService.t('coworkTempCleanFailed'));
+        return;
+      }
+      const dirs = result.dirs ?? [];
+      setTempStorageUsageBytes(result.bytes ?? 0);
+      setTempStorageCleanableBytes(result.cleanableBytes ?? 0);
+      setTempCleanPreviewDirs(dirs);
+      const selection: Record<string, boolean> = {};
+      for (const dir of dirs) {
+        selection[dir.cwd] = !dir.isActive && dir.cleanableFiles > 0;
+      }
+      setTempCleanSelection(selection);
+      setShowTempCleanConfirm(true);
+    } catch (err) {
+      console.error('Failed to preview cowork temp storage:', err);
+      setTempStorageCleanResult(i18nService.t('coworkTempCleanFailed'));
+    } finally {
+      setIsLoadingTempCleanPreview(false);
+    }
+  }, [isCleaningTempStorage, isLoadingTempCleanPreview]);
+
+  const tempCleanSelectedDirs = useMemo(
+    () => tempCleanPreviewDirs.filter(dir => tempCleanSelection[dir.cwd] && !dir.isActive && dir.cleanableFiles > 0),
+    [tempCleanPreviewDirs, tempCleanSelection],
+  );
+  const tempCleanSelectedBytes = useMemo(
+    () => tempCleanSelectedDirs.reduce((sum, dir) => sum + dir.cleanableBytes, 0),
+    [tempCleanSelectedDirs],
+  );
+
+  const handleConfirmTempClean = useCallback(async () => {
+    if (isCleaningTempStorage || tempCleanSelectedDirs.length === 0) return;
+    setIsCleaningTempStorage(true);
+    setTempStorageCleanResult(null);
+    try {
+      const result = await window.electron?.cowork?.cleanTempStorage({
+        cwds: tempCleanSelectedDirs.map(dir => dir.cwd),
+      });
+      if (result?.success) {
+        setTempStorageCleanResult(
+          i18nService.t('coworkTempCleanedResult')
+            .replace('{count}', String(result.deletedFiles ?? 0))
+            .replace('{size}', formatBackupSize(result.freedBytes ?? 0) || '0 B'),
+        );
+        setShowTempCleanConfirm(false);
+        void refreshTempStorageUsage();
+      } else {
+        setTempStorageCleanResult(i18nService.t('coworkTempCleanFailed'));
+      }
+    } catch (err) {
+      console.error('Failed to clean cowork temp storage:', err);
+      setTempStorageCleanResult(i18nService.t('coworkTempCleanFailed'));
+    } finally {
+      setIsCleaningTempStorage(false);
+    }
+  }, [isCleaningTempStorage, refreshTempStorageUsage, tempCleanSelectedDirs]);
 
   useEffect(() => () => {
     if (emailCopiedTimerRef.current != null) {
@@ -4615,6 +4708,44 @@ const Settings: React.FC<SettingsProps> = ({
               }}
             />
 
+            <div>
+              <div className="flex items-center justify-between gap-4">
+                <div className="min-w-0 flex-1">
+                  <h4 className="text-sm font-medium text-foreground">
+                    {i18nService.t('coworkTempUsageTitle')}
+                  </h4>
+                  <p className="mt-1 text-sm text-secondary">
+                    {tempStorageUsageBytes === null
+                      ? i18nService.t('coworkTempUsageLoading')
+                      : i18nService.t('coworkTempUsageLabel')
+                          .replace('{size}', formatBackupSize(tempStorageUsageBytes) || '0 B')
+                          .replace(
+                            '{cleanable}',
+                            formatBackupSize(tempStorageCleanableBytes ?? 0) || '0 B',
+                          )}
+                  </p>
+                  <p className="mt-1 text-sm text-secondary">
+                    {i18nService.t('coworkTempUsageManualNote')}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    void handleOpenTempCleanConfirm();
+                  }}
+                  disabled={isLoadingTempCleanPreview || isCleaningTempStorage || tempStorageCleanableBytes === 0}
+                  className="shrink-0 rounded-lg border border-border px-3 py-1.5 text-sm font-medium text-foreground transition-colors hover:bg-surface-raised disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {isLoadingTempCleanPreview
+                    ? i18nService.t('coworkTempPreviewLoading')
+                    : i18nService.t('coworkTempCleanNow')}
+                </button>
+              </div>
+              {tempStorageCleanResult && (
+                <p className="mt-2 text-sm text-secondary">{tempStorageCleanResult}</p>
+              )}
+            </div>
+
           </div>
         );
 
@@ -5654,6 +5785,113 @@ const Settings: React.FC<SettingsProps> = ({
                       ? i18nService.t('openClawRepairRunning')
                       : i18nService.t('openClawRepairConfirmAction')}
                   </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {showTempCleanConfirm && (
+            <div
+              className="absolute inset-0 z-30 flex items-center justify-center bg-black/35 px-4 rounded-2xl"
+              onClick={() => {
+                if (!isCleaningTempStorage) setShowTempCleanConfirm(false);
+              }}
+            >
+              <div
+                className="bg-surface border-border border rounded-2xl shadow-xl w-full max-w-lg"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="px-5 pt-5 pb-4 border-b border-border">
+                  <div className="flex items-center gap-3">
+                    <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary-muted text-primary">
+                      <TrashIcon className="h-5 w-5" />
+                    </span>
+                    <h3 className="text-base font-semibold text-foreground">
+                      {i18nService.t('coworkTempCleanDialogTitle')}
+                    </h3>
+                  </div>
+                </div>
+
+                <div className="space-y-3 px-5 py-4">
+                  <p className="text-sm text-secondary">
+                    {i18nService.t('coworkTempCleanDialogIntro')}
+                  </p>
+                  {tempCleanPreviewDirs.length === 0 ? (
+                    <p className="rounded-xl border border-border px-3 py-3 text-sm text-secondary">
+                      {i18nService.t('coworkTempCleanDialogEmpty')}
+                    </p>
+                  ) : (
+                    <div className="max-h-64 overflow-y-auto rounded-xl border border-border divide-y divide-border">
+                      {tempCleanPreviewDirs.map((dir) => {
+                        const selectable = !dir.isActive && dir.cleanableFiles > 0;
+                        return (
+                          <label
+                            key={dir.cwd}
+                            className={`flex items-start gap-3 px-3 py-2.5 ${selectable ? 'cursor-pointer hover:bg-surface-raised' : 'opacity-60'}`}
+                          >
+                            <input
+                              type="checkbox"
+                              className="mt-0.5 h-4 w-4 shrink-0 rounded border-gray-300 accent-primary disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600"
+                              checked={Boolean(tempCleanSelection[dir.cwd]) && selectable}
+                              disabled={!selectable || isCleaningTempStorage}
+                              onChange={(e) => {
+                                setTempCleanSelection(prev => ({ ...prev, [dir.cwd]: e.target.checked }));
+                              }}
+                            />
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate text-sm text-foreground" title={dir.tempDir}>
+                                {dir.tempDir}
+                              </span>
+                              <span className="mt-0.5 block text-xs text-secondary">
+                                {dir.isActive
+                                  ? i18nService.t('coworkTempCleanDialogActiveTag')
+                                  : dir.cleanableFiles > 0
+                                    ? i18nService.t('coworkTempCleanDialogPerDir')
+                                        .replace('{size}', formatBackupSize(dir.cleanableBytes) || '0 B')
+                                        .replace('{count}', String(dir.cleanableFiles))
+                                    : i18nService.t('coworkTempCleanDialogProtectedOnly')}
+                              </span>
+                            </span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  )}
+                  <p className="text-xs text-secondary">
+                    {i18nService.t('coworkTempCleanDialogProtectedNote')}
+                  </p>
+                </div>
+
+                <div className="flex items-center justify-between gap-2 px-5 pb-5">
+                  <span className="text-sm text-secondary">
+                    {i18nService.t('coworkTempCleanDialogTotal').replace(
+                      '{size}',
+                      formatBackupSize(tempCleanSelectedBytes) || '0 B',
+                    )}
+                  </span>
+                  <div className="flex items-center space-x-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowTempCleanConfirm(false)}
+                      disabled={isCleaningTempStorage}
+                      className="px-3 py-1.5 text-sm text-foreground hover:bg-surface-raised rounded-xl border border-border disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
+                    >
+                      {i18nService.t('cancel')}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { void handleConfirmTempClean(); }}
+                      disabled={isCleaningTempStorage || tempCleanSelectedDirs.length === 0}
+                      className="inline-flex items-center justify-center gap-2 px-3 py-1.5 text-sm text-white bg-primary hover:bg-primary-hover rounded-xl disabled:opacity-60 disabled:cursor-not-allowed transition-colors active:scale-[0.98]"
+                    >
+                      {isCleaningTempStorage
+                        ? <ArrowPathIcon className="h-4 w-4 animate-spin" />
+                        : <TrashIcon className="h-4 w-4" />}
+                      {isCleaningTempStorage
+                        ? i18nService.t('coworkTempCleaning')
+                        : i18nService.t('coworkTempCleanDialogConfirm')}
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>

@@ -195,6 +195,18 @@ export interface CoworkConfig {
   openClawSessionPolicy: OpenClawSessionPolicyConfig;
 }
 
+/** Per-directory `.cowork-temp` preview entry shown in the clean confirmation dialog. */
+export interface CoworkTempDirPreview {
+  cwd: string;
+  tempDir: string;
+  totalBytes: number;
+  totalFiles: number;
+  cleanableBytes: number;
+  cleanableFiles: number;
+  isActive: boolean;
+  truncated: boolean;
+}
+
 export type CoworkConfigUpdate = Partial<Pick<
   CoworkConfig,
   | 'workingDirectory'

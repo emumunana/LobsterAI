@@ -12,6 +12,7 @@ import {
   normalizeBrowserHostnamePolicyList,
   normalizeBrowserWebAccessConfig,
 } from '../../shared/browserWebAccess/constants';
+import { COWORK_TEMP_DIR_NAME } from '../../shared/cowork/constants';
 import { normalizeMcpServerUrlInput } from '../../shared/mcp/url';
 import {
   AuthType,
@@ -357,6 +358,25 @@ const buildManagedSkillCreationPrompt = (skillsDirPath: string): string => [
   `  ${skillsDirPath}/<skill-name>/SKILL.md`,
   '',
   'Do NOT create skills under the workspace `skills/` subdirectory.',
+].join('\n');
+
+const MANAGED_DELIVERABLE_LINKS_PROMPT = [
+  '## Deliverable File Links',
+  '',
+  'When a turn creates or updates user-facing deliverable files (documents, spreadsheets,',
+  'presentations, HTML pages, images, audio, video, and similar outputs), you MUST list each',
+  'deliverable at the end of the final reply as a Markdown link with an absolute path:',
+  '',
+  '  `[report.docx](/absolute/path/to/report.docx)`',
+  '',
+  '- Both `[name](/absolute/path)` and `[name](file:///absolute/path)` are accepted.',
+  '- This also applies when files are produced indirectly, e.g. by a Python/Node script or a',
+  '  shell command you ran. Always link the final output files.',
+  `- Keep intermediate files (helper scripts, scratch data, drafts) inside the \`${COWORK_TEMP_DIR_NAME}/\``,
+  '  directory under the session working directory, and do not link them in the final reply.',
+  `- The user can clean up \`${COWORK_TEMP_DIR_NAME}/\` at any time;`,
+  '  anything the user should keep must be saved outside of it.',
+  '- Only link files that exist on disk after your work. Never link files you merely read.',
 ].join('\n');
 
 const MANAGED_MEMORY_POLICY_PROMPT = [
@@ -3134,6 +3154,7 @@ loopDetection: MANAGED_TOOL_LOOP_DETECTION,
       sections.push(MANAGED_WEB_SEARCH_POLICY_PROMPT);
       sections.push(MANAGED_BROWSER_POLICY_PROMPT);
       sections.push(MANAGED_EXEC_SAFETY_PROMPT);
+      sections.push(MANAGED_DELIVERABLE_LINKS_PROMPT);
       sections.push(MANAGED_MEMORY_POLICY_PROMPT);
       sections.push(MANAGED_HEARTBEAT_POLICY_PROMPT);
       sections.push(buildManagedSkillCreationPrompt(resolveSkillCreationPath()));

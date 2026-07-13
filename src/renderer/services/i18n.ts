@@ -2346,6 +2346,24 @@ const translations: Record<LanguageType, Record<string, string>> = {
     skipMissedJobsDescription: '启动时跳过离线期间未触发的定时任务，不补充执行（保存后生效）',
     usageAnalyticsEnabled: '帮助改进 LobsterAI',
     usageAnalyticsEnabledDescription: '允许发送基础使用统计，帮助我们改进功能体验。不会上传对话内容、文件内容或 API Key。',
+    coworkTempUsageTitle: '会话临时文件',
+    coworkTempUsageLoading: '正在统计占用空间…',
+    coworkTempUsageLabel: '当前占用 {size}，可清理 {cleanable}（其余为 90 天内的附件原图等受保护内容）',
+    coworkTempUsageManualNote: '不会自动删除任何文件，清理前会列出将删除的内容供确认。',
+    coworkTempPreviewLoading: '正在扫描…',
+    coworkTempCleanNow: '立即清理',
+    coworkTempCleaning: '清理中…',
+    coworkTempCleanedResult: '已清理 {count} 个文件，释放 {size}',
+    coworkTempCleanFailed: '清理临时文件失败',
+    coworkTempCleanDialogTitle: '确认清理会话临时文件',
+    coworkTempCleanDialogIntro: '将删除以下勾选目录中的临时文件（AI 生成的脚本、草稿等中间产物，以及 90 天前的附件原图）。请确认这些目录中没有你需要保留的文件。',
+    coworkTempCleanDialogEmpty: '没有可清理的临时文件',
+    coworkTempCleanDialogPerDir: '可清理 {size}（{count} 个文件）',
+    coworkTempCleanDialogActiveTag: '会话运行中，本次跳过',
+    coworkTempCleanDialogProtectedOnly: '仅包含受保护内容（90 天内的附件原图等），不会删除',
+    coworkTempCleanDialogProtectedNote: '90 天内的附件原图、正在运行的会话目录不会被删除；只影响 .cowork-temp 目录内的文件。',
+    coworkTempCleanDialogTotal: '合计可释放 {size}',
+    coworkTempCleanDialogConfirm: '确认清理',
 
     // 定时任务
     scheduledTasks: '定时任务',
@@ -5233,6 +5251,29 @@ const translations: Record<LanguageType, Record<string, string>> = {
     usageAnalyticsEnabled: 'Help improve LobsterAI',
     usageAnalyticsEnabledDescription:
       'Allow basic usage analytics to help improve the product. Chat content, file content, and API keys are not uploaded.',
+    coworkTempUsageTitle: 'Session temp files',
+    coworkTempUsageLoading: 'Measuring usage…',
+    coworkTempUsageLabel:
+      'Using {size}, {cleanable} cleanable (the rest is protected content such as attachment originals from the last 90 days)',
+    coworkTempUsageManualNote:
+      'Nothing is deleted automatically — cleaning always shows what will be removed first.',
+    coworkTempPreviewLoading: 'Scanning…',
+    coworkTempCleanNow: 'Clean now',
+    coworkTempCleaning: 'Cleaning…',
+    coworkTempCleanedResult: 'Removed {count} files, freed {size}',
+    coworkTempCleanFailed: 'Failed to clean temp files',
+    coworkTempCleanDialogTitle: 'Confirm cleaning session temp files',
+    coworkTempCleanDialogIntro:
+      'Temp files in the checked directories will be deleted (AI-generated helper scripts, drafts, and attachment originals older than 90 days). Make sure these directories contain nothing you need to keep.',
+    coworkTempCleanDialogEmpty: 'No temp files to clean',
+    coworkTempCleanDialogPerDir: '{size} cleanable ({count} files)',
+    coworkTempCleanDialogActiveTag: 'Session running — skipped this time',
+    coworkTempCleanDialogProtectedOnly:
+      'Only protected content (e.g. attachment originals from the last 90 days) — nothing will be deleted',
+    coworkTempCleanDialogProtectedNote:
+      'Attachment originals from the last 90 days and directories with a running session are never deleted; only files inside .cowork-temp are affected.',
+    coworkTempCleanDialogTotal: 'Total to free: {size}',
+    coworkTempCleanDialogConfirm: 'Clean selected',
 
     // Scheduled Tasks
     scheduledTasks: 'Scheduled Tasks',
