@@ -7,7 +7,7 @@ import net from 'net';
 import os from 'os';
 import path from 'path';
 
-import type { OpenClawEnginePhase } from '../../shared/openclawEngine/constants';
+import { OpenClawEngineErrorCode, type OpenClawEnginePhase } from '../../shared/openclawEngine/constants';
 import { ensureElectronNodeShim, getElectronNodeRuntimePath, getSkillsRoot } from './coworkUtil';
 import {
   formatGatewayLogDateKey,
@@ -16,6 +16,7 @@ import {
   getRecentGatewayLogEntries,
   pruneGatewayLogs,
 } from './gatewayLogRotation';
+import { recoverInstallerResourcesFromTar } from './installerResourceRecovery';
 import { getCodexHomeDir } from './openaiCodexAuth';
 import { migrateLegacyCronStorageWithDoctor } from './openclawCronLegacyMigration';
 import { cleanupStaleThirdPartyPluginsFromBundledDir, listLocalOpenClawExtensionIds,syncLocalOpenClawExtensionsIntoRuntime } from './openclawLocalExtensions';
@@ -61,6 +62,7 @@ export interface OpenClawEngineStatus {
   version: string | null;
   progressPercent?: number;
   message?: string;
+  errorCode?: OpenClawEngineErrorCode;
   gatewayPort?: number | null;
   gatewayHttpUrl?: string | null;
   canRetry: boolean;
@@ -430,6 +432,12 @@ export class OpenClawEngineManager extends EventEmitter {
     const t0 = Date.now();
     const elapsed = () => `${Date.now() - t0}ms`;
 
+    // Heal installs where the installer's win-resources.tar extraction never
+    // finished (killed or frozen by security software): the runtime entry is
+    // missing but the preserved archive can restore it. Cheap no-op when the
+    // runtime is intact.
+    await this.maybeRecoverInstallerResources('gateway-start');
+
     const ensured = await this.ensureReady();
     console.log(`[OpenClaw] startGateway: ensureReady done (${elapsed()}), phase=${ensured.phase}`);
     if (ensured.phase !== 'ready' && ensured.phase !== 'running') {
@@ -483,6 +491,7 @@ export class OpenClawEngineManager extends EventEmitter {
         phase: 'error',
         version: runtime.version,
         message: `OpenClaw entry file is missing in runtime: ${runtime.root}.`,
+        errorCode: OpenClawEngineErrorCode.RuntimeEntryMissing,
         canRetry: true,
       });
       return this.getStatus();
@@ -741,6 +750,57 @@ export class OpenClawEngineManager extends EventEmitter {
       gatewayPort: port,
       gatewayHttpUrl: this.buildGatewayHttpUrl(port),
     };
+  }
+
+  /**
+   * Finish an interrupted installation on packaged Windows builds: when the
+   * NSIS installer was stopped before unpacking win-resources.tar, the app
+   * ships with empty cfmind/python-win/SKILLs directories while the archive
+   * still sits next to them. Extracting it restores the runtime in place;
+   * the archive is preserved on failure so the next attempt can retry.
+   */
+  private async maybeRecoverInstallerResources(reason: string): Promise<void> {
+    if (process.platform !== 'win32' || !app.isPackaged) {
+      return;
+    }
+
+    const statusBeforeRecovery = this.status;
+    let statusTouched = false;
+    try {
+      const result = await recoverInstallerResourcesFromTar(
+        process.resourcesPath,
+        reason,
+        ({ bytes, totalBytes }) => {
+          statusTouched = true;
+          this.setStatus({
+            phase: 'installing',
+            version: this.status.version,
+            progressPercent: totalBytes > 0 ? Math.min(99, Math.floor((bytes / totalBytes) * 100)) : undefined,
+            message: 'Recovering bundled resources from the installer archive...',
+            canRetry: false,
+          });
+        },
+      );
+
+      if (result.attempted && result.success) {
+        // Runtime version metadata was unreadable while the files were missing.
+        const runtime = this.resolveRuntimeMetadata();
+        this.desiredVersion = runtime.version || this.desiredVersion;
+        this.setStatus({
+          phase: 'ready',
+          version: this.desiredVersion,
+          message: 'OpenClaw runtime was recovered from installer resources.',
+          canRetry: false,
+        });
+      } else if (statusTouched) {
+        this.setStatus(statusBeforeRecovery);
+      }
+    } catch (error) {
+      console.error('[OpenClaw] installer resource recovery attempt failed:', error);
+      if (statusTouched) {
+        this.setStatus(statusBeforeRecovery);
+      }
+    }
   }
 
   private resolveRuntimeMetadata(): RuntimeMetadata {
