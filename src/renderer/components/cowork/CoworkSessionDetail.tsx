@@ -24,7 +24,8 @@ import {
   type CoworkSelectedTextValidationError,
   normalizeCoworkSelectedTextSnippets,
 } from '../../../shared/cowork/selectedText';
-import { dedupeArtifactsForDisplay, normalizeFilePathForDedup, normalizeLocalServiceOrigin, normalizeLocalServiceUrlForDedup, parseFileLinksFromMessage, parseFilePathsFromText, parseLocalServiceUrlsFromText, parseMediaTokensFromText, parseRemoteImageArtifactsFromText, parseToolArtifact, parseToolResultMediaArtifacts, shouldParseFilePathsFromToolResult, stripFileLinksFromText } from '../../services/artifactParser';
+import { collectSessionArtifacts, loadDetectedFileArtifact } from '../../services/artifactDetection';
+import { dedupeArtifactsForDisplay, normalizeFilePathForDedup, normalizeLocalServiceOrigin, parseMediaTokensFromText } from '../../services/artifactParser';
 import { coworkService } from '../../services/cowork';
 import { i18nService } from '../../services/i18n';
 import { getInstalledKitSkillIds } from '../../services/kitCapability';
@@ -110,6 +111,7 @@ import {
   COWORK_DETAIL_CONTENT_CLASS,
   COWORK_DETAIL_GUTTER_CLASS,
   getStreamingActivityStatusText,
+  getTurnMessageIds,
   hasRenderableAssistantContent,
   MEDIA_TOKEN_DISPLAY_RE,
   type ToolGroupItem,
@@ -281,23 +283,6 @@ type ExpandedConversationPreviewItem = {
 type ExpandedConversationPreview = {
   latest: ExpandedConversationPreviewItem;
   items: ExpandedConversationPreviewItem[];
-};
-
-const getTurnMessageIds = (turn: ConversationTurn): Set<string> => {
-  const messageIds = new Set<string>();
-  for (const item of turn.assistantItems) {
-    if (item.type === 'assistant' || item.type === 'system' || item.type === 'tool_result') {
-      messageIds.add(item.message.id);
-      continue;
-    }
-    if (item.type === 'tool_group') {
-      messageIds.add(item.group.toolUse.id);
-      if (item.group.toolResult) {
-        messageIds.add(item.group.toolResult.id);
-      }
-    }
-  }
-  return messageIds;
 };
 
 const findLatestAssistantTurn = (turns: ConversationTurn[]): ConversationTurn | null => {
@@ -2810,136 +2795,9 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     if (isStreaming) return;
 
     try {
-      const messages = currentSession.messages;
-      const detected: Artifact[] = [];
-      const pushFileArtifactIfNew = (artifact: Artifact, seenFilePaths: Set<string>) => {
-        const normalized = artifact.filePath ? normalizeFilePathForDedup(artifact.filePath) : '';
-        if (!artifact.filePath || seenFilePaths.has(normalized)) return;
-        seenFilePaths.add(normalized);
-        detected.push(artifact);
-      };
-      const pushLocalServiceArtifactIfNew = (artifact: Artifact, seenLocalServiceUrls: Set<string>) => {
-        const url = artifact.url || artifact.content;
-        const normalized = normalizeLocalServiceUrlForDedup(url);
-        if (!url || seenLocalServiceUrls.has(normalized)) return;
-        seenLocalServiceUrls.add(normalized);
-        detected.push(artifact);
-      };
-
-      for (const msg of messages) {
-        if (msg.type === 'assistant' && !msg.metadata?.isThinking && msg.content) {
-          const seenFilePaths = new Set<string>();
-          const seenLocalServiceUrls = new Set<string>();
-          const localServiceArtifacts = parseLocalServiceUrlsFromText(
-            msg.content,
-            msg.id,
-            sessionId,
-            { projectDirectory: currentSession.cwd },
-          );
-          for (const serviceArtifact of localServiceArtifacts) {
-            pushLocalServiceArtifactIfNew(serviceArtifact, seenLocalServiceUrls);
-          }
-
-          const fileLinks = parseFileLinksFromMessage(msg.content, msg.id, sessionId);
-          for (const fl of fileLinks) {
-            pushFileArtifactIfNew(fl, seenFilePaths);
-          }
-
-          const contentWithoutFileLinks = stripFileLinksFromText(msg.content);
-          const pathArtifacts = parseFilePathsFromText(contentWithoutFileLinks, msg.id, sessionId);
-          for (const pa of pathArtifacts) {
-            pushFileArtifactIfNew(pa, seenFilePaths);
-          }
-
-          detected.push(...parseRemoteImageArtifactsFromText(msg.content, msg.id, sessionId, 'artifact-remote-assistant'));
-        }
-
-        if (msg.type === 'tool_result') {
-          const seenFilePaths = new Set<string>();
-          const toolMediaArtifacts = parseToolResultMediaArtifacts(msg, sessionId);
-          if (toolMediaArtifacts.length > 0) {
-            for (const mediaArtifact of toolMediaArtifacts) {
-              if (mediaArtifact.filePath) {
-                pushFileArtifactIfNew(mediaArtifact, seenFilePaths);
-              } else {
-                detected.push(mediaArtifact);
-              }
-            }
-            continue;
-          }
-
-          if (!msg.content) continue;
-
-          const mediaArtifacts = parseMediaTokensFromText(msg.content, msg.id, sessionId);
-          for (const ma of mediaArtifacts) {
-            pushFileArtifactIfNew(ma, seenFilePaths);
-          }
-
-          // Only parse bare file paths from tool results of image generation tools.
-          // Other tools (e.g. Bash running `find`) may output many file paths in their
-          // results that should NOT become artifacts.
-          const toolUseId = msg.metadata?.toolUseId;
-          const pairedToolUse = toolUseId
-            ? messages.find(m => m.type === 'tool_use' && m.metadata?.toolUseId === toolUseId)
-            : undefined;
-          const toolName = pairedToolUse?.metadata?.toolName
-            ? String(pairedToolUse.metadata.toolName)
-            : '';
-          if (shouldParseFilePathsFromToolResult(toolName)) {
-            const pathArtifacts = parseFilePathsFromText(msg.content, msg.id, sessionId, 'artifact-toolresult');
-            for (const pa of pathArtifacts) {
-              pushFileArtifactIfNew(pa, seenFilePaths);
-            }
-          }
-          detected.push(...parseRemoteImageArtifactsFromText(msg.content, msg.id, sessionId, 'artifact-remote-toolresult'));
-        }
-
-        if (msg.type === 'system') {
-          const seenFilePaths = new Set<string>();
-          const toolMediaArtifacts = parseToolResultMediaArtifacts(msg, sessionId);
-          if (toolMediaArtifacts.length > 0) {
-            for (const mediaArtifact of toolMediaArtifacts) {
-              if (mediaArtifact.filePath) {
-                pushFileArtifactIfNew(mediaArtifact, seenFilePaths);
-              } else {
-                detected.push(mediaArtifact);
-              }
-            }
-            continue;
-          }
-
-          if (!msg.content) continue;
-
-          const fileLinks = parseFileLinksFromMessage(msg.content, msg.id, sessionId);
-          for (const fl of fileLinks) {
-            pushFileArtifactIfNew(fl, seenFilePaths);
-          }
-
-          const contentWithoutFileLinks = stripFileLinksFromText(msg.content);
-          const pathArtifacts = parseFilePathsFromText(contentWithoutFileLinks, msg.id, sessionId, 'artifact-system-path');
-          for (const pa of pathArtifacts) {
-            pushFileArtifactIfNew(pa, seenFilePaths);
-          }
-
-          detected.push(...parseRemoteImageArtifactsFromText(msg.content, msg.id, sessionId, 'artifact-remote-system'));
-        }
-      }
-
-      for (let i = 0; i < messages.length; i++) {
-        const msg = messages[i];
-        if (msg.type === 'tool_use') {
-          const toolUseId = msg.metadata?.toolUseId;
-          const toolResult = toolUseId
-            ? messages.find(m => m.type === 'tool_result' && m.metadata?.toolUseId === toolUseId)
-            : messages[i + 1]?.type === 'tool_result' ? messages[i + 1] : undefined;
-          const toolArtifact = parseToolArtifact(msg, toolResult, sessionId);
-          if (toolArtifact && toolArtifact.filePath) {
-            detected.push(toolArtifact);
-          }
-        }
-      }
-
       const cwd = currentSession.cwd;
+      const detected = collectSessionArtifacts(currentSession.messages, sessionId, cwd);
+
       for (const artifact of detected) {
         if (artifact.type === ArtifactTypeValue.LocalService) {
           dispatch(addArtifact({ sessionId, artifact, defaultProjectDirectory: cwd }));
@@ -2951,70 +2809,11 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
 
       const loadFiles = async () => {
         for (const artifact of toLoad) {
-          let rawPath = artifact.filePath!;
-          if (rawPath.startsWith('file:///')) {
-            rawPath = rawPath.slice(7);
-          } else if (rawPath.startsWith('file://')) {
-            rawPath = rawPath.slice(7);
-          } else if (rawPath.startsWith('file:/')) {
-            rawPath = rawPath.slice(5);
-          }
-          // Strip leading / before Windows drive letter
-          if (/^\/[A-Za-z]:/.test(rawPath)) {
-            rawPath = rawPath.slice(1);
-          }
-          const absPath = rawPath.startsWith('/')
-            ? rawPath
-            : (/^[A-Za-z]:/.test(rawPath) ? rawPath : `${cwd}/${rawPath}`);
-          if (artifact.type === 'video') {
-            loadedFileIdsRef.current.add(artifact.id);
-            dispatch(addArtifact({
-              sessionId,
-              artifact: { ...artifact, content: '', filePath: absPath },
-            }));
-            continue;
-          }
-          if (artifact.type === ArtifactTypeValue.Html) {
-            try {
-              const stat = await window.electron.dialog.statFile(absPath);
-              if (stat?.success && stat.isFile) {
-                dispatch(addArtifact({
-                  sessionId,
-                  artifact: { ...artifact, content: '', filePath: absPath, contentVersion: Date.now() },
-                }));
-              }
-            } catch {
-              // File unreadable or missing.
-            }
-            loadedFileIdsRef.current.add(artifact.id);
-            continue;
-          }
-          try {
-            const result = await window.electron.dialog.readFileAsDataUrl(absPath);
-            if (result?.success && result.dataUrl) {
-              const isTextType = artifact.type !== 'image' && artifact.type !== 'document';
-              let content = result.dataUrl;
-              if (isTextType) {
-                try {
-                  const base64 = result.dataUrl.split(',')[1] || '';
-                  const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
-                  content = new TextDecoder('utf-8').decode(bytes);
-                } catch {
-                  content = result.dataUrl;
-                }
-              }
-              loadedFileIdsRef.current.add(artifact.id);
-              dispatch(addArtifact({
-                sessionId,
-                artifact: { ...artifact, content, filePath: absPath },
-              }));
-            } else {
-              // File does not exist or is unreadable — mark as loaded to avoid retrying
-              loadedFileIdsRef.current.add(artifact.id);
-            }
-          } catch {
-            // File unreadable or missing — mark as loaded to avoid retrying
-            loadedFileIdsRef.current.add(artifact.id);
+          const loaded = await loadDetectedFileArtifact(artifact, cwd);
+          // Mark as loaded either way to avoid retrying missing files.
+          loadedFileIdsRef.current.add(artifact.id);
+          if (loaded) {
+            dispatch(addArtifact({ sessionId, artifact: loaded }));
           }
         }
       };
@@ -3058,59 +2857,11 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
       const loadFiles = async () => {
         for (const artifact of toLoad) {
           if (loadedFileIdsRef.current.has(artifact.id)) continue;
-          let rawPath = artifact.filePath!;
-          if (rawPath.startsWith('file:///')) {
-            rawPath = rawPath.slice(7);
-          } else if (rawPath.startsWith('file://')) {
-            rawPath = rawPath.slice(7);
-          } else if (rawPath.startsWith('file:/')) {
-            rawPath = rawPath.slice(5);
-          }
-          if (/^\/[A-Za-z]:/.test(rawPath)) {
-            rawPath = rawPath.slice(1);
-          }
-          const absPath = rawPath.startsWith('/')
-            ? rawPath
-            : (/^[A-Za-z]:/.test(rawPath) ? rawPath : `${cwd}/${rawPath}`);
-          if (artifact.type === ArtifactTypeValue.Html) {
-            try {
-              const stat = await window.electron.dialog.statFile(absPath);
-              if (stat?.success && stat.isFile) {
-                dispatch(addArtifact({
-                  sessionId,
-                  artifact: { ...artifact, content: '', filePath: absPath, contentVersion: Date.now() },
-                }));
-              }
-            } catch {
-              // File unreadable or missing.
-            }
-            loadedFileIdsRef.current.add(artifact.id);
-            continue;
-          }
-          try {
-            const result = await window.electron.dialog.readFileAsDataUrl(absPath);
-            if (result?.success && result.dataUrl) {
-              const isTextType = artifact.type !== 'image' && artifact.type !== 'document';
-              let content = result.dataUrl;
-              if (isTextType) {
-                try {
-                  const base64 = result.dataUrl.split(',')[1] || '';
-                  const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
-                  content = new TextDecoder('utf-8').decode(bytes);
-                } catch {
-                  content = result.dataUrl;
-                }
-              }
-              loadedFileIdsRef.current.add(artifact.id);
-              dispatch(addArtifact({
-                sessionId,
-                artifact: { ...artifact, content, filePath: absPath },
-              }));
-            } else {
-              loadedFileIdsRef.current.add(artifact.id);
-            }
-          } catch {
-            loadedFileIdsRef.current.add(artifact.id);
+          const loaded = await loadDetectedFileArtifact(artifact, cwd);
+          // Mark as loaded either way to avoid retrying missing files.
+          loadedFileIdsRef.current.add(artifact.id);
+          if (loaded) {
+            dispatch(addArtifact({ sessionId, artifact: loaded }));
           }
         }
       };
@@ -4434,7 +4185,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
               {updateBadge}
             </div>
           )}
-          <h1 className="text-sm leading-none font-medium text-foreground truncate max-w-[360px]">
+          <h1 className="text-sm leading-5 font-medium text-foreground truncate max-w-[360px]">
             {getSessionTitleForDisplay(currentSession.title) || i18nService.t('coworkNewSession')}
           </h1>
         </div>

@@ -851,6 +851,9 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkOpenClawQuickRepair: '一键修复',
     coworkOpenClawErrorRepairHint:
       '推荐使用一键修复：自动备份并重建 OpenClaw 配置后重新启动网关，可解决大多数启动失败问题；不会删除聊天记录、模型配置、技能或工作区文件。',
+    coworkOpenClawRuntimeMissingError: 'AI 引擎运行时文件缺失，安装未完成。',
+    coworkOpenClawRuntimeMissingRepairHint:
+      '常见原因是安装过程被安全软件拦截或中途退出。可先尝试一键修复（会从安装包残留资源自动恢复运行时）；若修复无效，请将安装目录加入安全软件信任区后，重新下载安装包覆盖安装。聊天记录、模型配置与工作区文件不会丢失。',
     coworkOpenClawErrorShort: '网关启动失败',
     coworkOpenClawErrorDefer: '稍后处理',
     openClawMaintenanceTitle: '运行维护',
@@ -1147,6 +1150,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkGreetingEvening: '晚上好',
     coworkGreetingLateNight: '夜深了',
     coworkHomeTagline: '我是 LobsterAI，你的全场景办公 Agent',
+    coworkQuickActionCollapse: '收起',
     coworkCurrentAgent: '当前 Agent',
     coworkSelectAgent: '选择 Agent',
 
@@ -2338,14 +2342,41 @@ const translations: Record<LanguageType, Record<string, string>> = {
     browserWebFetchAllowFakeIpDescription: '仅在 Clash TUN、Surge 等代理环境需要时开启。',
     sqliteAutoBackupEnabled: '启用自动备份与恢复',
     sqliteAutoBackupEnabledDescription: '开启后将自动备份数据，并在启动时尝试恢复损坏的数据',
-    taskCompletionNotifications: '任务完成通知',
-    taskCompletionNotificationsDescription: '应用不在前台时，任务完成后显示系统提醒',
+    taskCompletionNotificationMode: '任务完成通知',
+    taskCompletionNotificationModeDescription: '设置任务完成时的系统提醒时机',
+    taskCompletionNotificationModeAlways: '总是',
+    taskCompletionNotificationModeUnfocused: '应用未聚焦时',
+    taskCompletionNotificationModeOff: '从不',
+    permissionNotifications: '等待授权时通知',
+    permissionNotificationsDescription: '会话等待你确认操作时显示系统提醒',
+    questionNotifications: '等待输入时通知',
+    questionNotificationsDescription: '会话等待你回答问题时显示系统提醒',
+    notificationSystemPermissionHint: '若未收到通知，请在系统设置中允许 LobsterAI 发送通知。',
+    openSystemNotificationSettings: '打开系统设置',
     preventSleep: '防止休眠',
     preventSleepDescription: '防止系统在应用运行时进入睡眠模式',
     skipMissedJobs: '跳过未执行任务',
     skipMissedJobsDescription: '启动时跳过离线期间未触发的定时任务，不补充执行（保存后生效）',
     usageAnalyticsEnabled: '帮助改进 LobsterAI',
     usageAnalyticsEnabledDescription: '允许发送基础使用统计，帮助我们改进功能体验。不会上传对话内容、文件内容或 API Key。',
+    coworkTempUsageTitle: '会话临时文件',
+    coworkTempUsageLoading: '正在统计占用空间…',
+    coworkTempUsageLabel: '当前占用 {size}，可清理 {cleanable}（其余为 90 天内的附件原图等受保护内容）',
+    coworkTempUsageManualNote: '不会自动删除任何文件，清理前会列出将删除的内容供确认。',
+    coworkTempPreviewLoading: '正在扫描…',
+    coworkTempCleanNow: '立即清理',
+    coworkTempCleaning: '清理中…',
+    coworkTempCleanedResult: '已清理 {count} 个文件，释放 {size}',
+    coworkTempCleanFailed: '清理临时文件失败',
+    coworkTempCleanDialogTitle: '确认清理会话临时文件',
+    coworkTempCleanDialogIntro: '将删除以下勾选目录中的临时文件（AI 生成的脚本、草稿等中间产物，以及 90 天前的附件原图）。请确认这些目录中没有你需要保留的文件。',
+    coworkTempCleanDialogEmpty: '没有可清理的临时文件',
+    coworkTempCleanDialogPerDir: '可清理 {size}（{count} 个文件）',
+    coworkTempCleanDialogActiveTag: '会话运行中，本次跳过',
+    coworkTempCleanDialogProtectedOnly: '仅包含受保护内容（90 天内的附件原图等），不会删除',
+    coworkTempCleanDialogProtectedNote: '90 天内的附件原图、正在运行的会话目录不会被删除；只影响 .cowork-temp 目录内的文件。',
+    coworkTempCleanDialogTotal: '合计可释放 {size}',
+    coworkTempCleanDialogConfirm: '确认清理',
 
     // 定时任务
     scheduledTasks: '定时任务',
@@ -3654,6 +3685,9 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkOpenClawQuickRepair: 'Quick Repair',
     coworkOpenClawErrorRepairHint:
       'Quick Repair backs up and rebuilds the OpenClaw config, then restarts the gateway. It resolves most startup failures and keeps chats, model settings, skills, and workspace files.',
+    coworkOpenClawRuntimeMissingError: 'AI engine runtime files are missing — the installation did not complete.',
+    coworkOpenClawRuntimeMissingRepairHint:
+      'This usually happens when security software blocks the installer or it exits early. Try Quick Repair first — it restores the runtime from leftover installer resources. If that fails, add the install directory to your security software allowlist, then download the installer again and reinstall. Chats, model settings, and workspace files are preserved.',
     coworkOpenClawErrorShort: 'Gateway failed to start',
     coworkOpenClawErrorDefer: 'Later',
     openClawMaintenanceTitle: 'Run Maintenance',
@@ -3976,6 +4010,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     coworkGreetingEvening: 'Good evening',
     coworkGreetingLateNight: 'Up late?',
     coworkHomeTagline: "I'm LobsterAI, your all-in-one office agent",
+    coworkQuickActionCollapse: 'Collapse',
     coworkCurrentAgent: 'Current Agent',
     coworkSelectAgent: 'Select Agent',
 
@@ -5222,9 +5257,20 @@ const translations: Record<LanguageType, Record<string, string>> = {
     sqliteAutoBackupEnabled: 'Enable Auto Backup and Recovery',
     sqliteAutoBackupEnabledDescription:
       'When enabled, the app automatically backs up data and tries to restore corrupted data on startup',
-    taskCompletionNotifications: 'Task Completion Notifications',
-    taskCompletionNotificationsDescription:
-      'Show a system alert when a task completes while the app is not in the foreground',
+    taskCompletionNotificationMode: 'Task Completion Notifications',
+    taskCompletionNotificationModeDescription: 'Set when to show a system alert after a task completes',
+    taskCompletionNotificationModeAlways: 'Always',
+    taskCompletionNotificationModeUnfocused: 'When app is unfocused',
+    taskCompletionNotificationModeOff: 'Never',
+    permissionNotifications: 'Approval Notifications',
+    permissionNotificationsDescription:
+      'Show a system alert when a session is waiting for you to approve an action',
+    questionNotifications: 'Question Notifications',
+    questionNotificationsDescription:
+      'Show a system alert when a session is waiting for you to answer a question',
+    notificationSystemPermissionHint:
+      'If you are not receiving notifications, allow LobsterAI to send notifications in the system settings.',
+    openSystemNotificationSettings: 'Open System Settings',
     preventSleep: 'Prevent Sleep',
     preventSleepDescription: 'Prevent the system from sleeping while the app is running',
     skipMissedJobs: 'Skip Missed Scheduled Jobs',
@@ -5233,6 +5279,29 @@ const translations: Record<LanguageType, Record<string, string>> = {
     usageAnalyticsEnabled: 'Help improve LobsterAI',
     usageAnalyticsEnabledDescription:
       'Allow basic usage analytics to help improve the product. Chat content, file content, and API keys are not uploaded.',
+    coworkTempUsageTitle: 'Session temp files',
+    coworkTempUsageLoading: 'Measuring usage…',
+    coworkTempUsageLabel:
+      'Using {size}, {cleanable} cleanable (the rest is protected content such as attachment originals from the last 90 days)',
+    coworkTempUsageManualNote:
+      'Nothing is deleted automatically — cleaning always shows what will be removed first.',
+    coworkTempPreviewLoading: 'Scanning…',
+    coworkTempCleanNow: 'Clean now',
+    coworkTempCleaning: 'Cleaning…',
+    coworkTempCleanedResult: 'Removed {count} files, freed {size}',
+    coworkTempCleanFailed: 'Failed to clean temp files',
+    coworkTempCleanDialogTitle: 'Confirm cleaning session temp files',
+    coworkTempCleanDialogIntro:
+      'Temp files in the checked directories will be deleted (AI-generated helper scripts, drafts, and attachment originals older than 90 days). Make sure these directories contain nothing you need to keep.',
+    coworkTempCleanDialogEmpty: 'No temp files to clean',
+    coworkTempCleanDialogPerDir: '{size} cleanable ({count} files)',
+    coworkTempCleanDialogActiveTag: 'Session running — skipped this time',
+    coworkTempCleanDialogProtectedOnly:
+      'Only protected content (e.g. attachment originals from the last 90 days) — nothing will be deleted',
+    coworkTempCleanDialogProtectedNote:
+      'Attachment originals from the last 90 days and directories with a running session are never deleted; only files inside .cowork-temp are affected.',
+    coworkTempCleanDialogTotal: 'Total to free: {size}',
+    coworkTempCleanDialogConfirm: 'Clean selected',
 
     // Scheduled Tasks
     scheduledTasks: 'Scheduled Tasks',

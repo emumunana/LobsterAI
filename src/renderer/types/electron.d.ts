@@ -37,6 +37,7 @@ import type {
   LocalWebService,
 } from '../../shared/localWebServices/constants';
 import type {
+  OpenClawEngineErrorCode,
   OpenClawEnginePhase as SharedOpenClawEnginePhase,
   OpenClawGatewayRepairErrorCode,
 } from '../../shared/openclawEngine/constants';
@@ -53,6 +54,7 @@ import type {
   ShellGetBrowserAppsInput,
   ShellOpenFailureReason,
 } from '../../shared/shell/constants';
+import type { CoworkTempDirPreview } from './cowork';
 interface ApiResponse {
   ok: boolean;
   status: number;
@@ -187,6 +189,27 @@ type CoworkConfigUpdate = Partial<
   >
 >;
 
+interface CoworkTempStorageUsageResult {
+  success: boolean;
+  dirs?: CoworkTempDirPreview[];
+  bytes?: number;
+  files?: number;
+  cleanableBytes?: number;
+  cleanableFiles?: number;
+  truncated?: boolean;
+  error?: string;
+}
+
+interface CoworkTempStorageCleanResult {
+  success: boolean;
+  sweptDirs?: number;
+  deletedFiles?: number;
+  freedBytes?: number;
+  skippedEntries?: number;
+  truncated?: boolean;
+  error?: string;
+}
+
 interface CoworkUserMemoryEntry {
   id: string;
   text: string;
@@ -224,6 +247,7 @@ interface OpenClawEngineStatus {
   version: string | null;
   progressPercent?: number;
   message?: string;
+  errorCode?: OpenClawEngineErrorCode;
   gatewayPort?: number | null;
   gatewayHttpUrl?: string | null;
   canRetry: boolean;
@@ -790,6 +814,9 @@ interface IElectronAPI {
     markSessionViewed: (
       sessionId: string,
     ) => Promise<{ success: boolean; error?: string }>;
+    setActiveSession: (
+      sessionId: string | null,
+    ) => Promise<{ success: boolean; error?: string }>;
     remoteManaged: (
       sessionId: string,
     ) => Promise<{ success: boolean; remoteManaged: boolean; error?: string }>;
@@ -932,6 +959,8 @@ interface IElectronAPI {
     }) => Promise<{ success: boolean; error?: string }>;
     getConfig: () => Promise<{ success: boolean; config?: CoworkConfig; error?: string }>;
     setConfig: (config: CoworkConfigUpdate) => Promise<{ success: boolean; error?: string }>;
+    getTempStorageUsage: () => Promise<CoworkTempStorageUsageResult>;
+    cleanTempStorage: (options?: { cwds?: string[] }) => Promise<CoworkTempStorageCleanResult>;
     notifyOpenSessionFromNotificationReady: () => Promise<{ success: boolean; error?: string }>;
     onOpenSessionFromNotification: (
       callback: (data: { sessionId: string }) => void,
@@ -1184,6 +1213,7 @@ interface IElectronAPI {
       updatedAt: number;
     }>;
     relaunch: () => Promise<void>;
+    openSystemNotificationSettings: () => Promise<{ success: boolean; error?: string }>;
   };
   appUpdate: {
     getState: () => Promise<AppUpdateRuntimeState>;

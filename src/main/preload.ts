@@ -405,6 +405,8 @@ contextBridge.exposeInMainWorld('electron', {
     getSession: (sessionId: string) => ipcRenderer.invoke('cowork:session:get', sessionId),
     markSessionViewed: (sessionId: string) =>
       ipcRenderer.invoke(CoworkIpcChannel.MarkSessionViewed, sessionId),
+    setActiveSession: (sessionId: string | null) =>
+      ipcRenderer.invoke(CoworkIpcChannel.SetActiveSession, sessionId),
     notifyOpenSessionFromNotificationReady: () =>
       ipcRenderer.invoke(CoworkIpcChannel.OpenSessionFromNotificationReady),
     remoteManaged: (sessionId: string) =>
@@ -478,6 +480,11 @@ contextBridge.exposeInMainWorld('electron', {
       embeddingRemoteBaseUrl?: string;
       embeddingRemoteApiKey?: string;
     }) => ipcRenderer.invoke('cowork:config:set', config),
+
+    // Session temp storage (.cowork-temp) maintenance
+    getTempStorageUsage: () => ipcRenderer.invoke(CoworkIpcChannel.TempStorageUsage),
+    cleanTempStorage: (options?: { cwds?: string[] }) =>
+      ipcRenderer.invoke(CoworkIpcChannel.TempStorageClean, options),
     listMemoryEntries: (input: {
       query?: string;
       status?: 'created' | 'stale' | 'deleted' | 'all';
@@ -771,6 +778,8 @@ contextBridge.exposeInMainWorld('electron', {
     getSystemLocale: () => ipcRenderer.invoke('app:getSystemLocale'),
     getKeyfromAttribution: () => ipcRenderer.invoke(AppIpcChannel.GetKeyfromAttribution),
     relaunch: () => ipcRenderer.invoke('app:relaunch'),
+    openSystemNotificationSettings: () =>
+      ipcRenderer.invoke(AppIpcChannel.OpenSystemNotificationSettings),
   },
   appUpdate: {
     getState: () => ipcRenderer.invoke(AppUpdateIpc.GetState),
