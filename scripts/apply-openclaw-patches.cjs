@@ -63,6 +63,25 @@ if (patchFiles.length === 0) {
 console.log(`[apply-openclaw-patches] Applying patches for openclaw ${openclawVersion} (${patchFiles.length} file(s))`);
 
 const strongPatchValidators = {
+  'openclaw-stop-loop-after-aborted-tool-run.patch': [
+    {
+      file: 'packages/agent-core/src/agent-loop.ts',
+      snippets: [
+        'const stopIfAborted = async (): Promise<boolean> => {',
+        'signal.reason instanceof Error ? signal.reason : new Error("Agent run aborted")',
+        'await emit({ type: "turn_end", message: abortedMessage, toolResults: [] });',
+        'if (await stopIfAborted())',
+      ],
+    },
+    {
+      file: 'packages/agent-core/src/agent-loop.test.ts',
+      snippets: [
+        'does not request another model turn after a tool aborts the run',
+        'does not request another model turn when an async turn hook aborts the run',
+        'expect(streamCalls).toBe(1)',
+      ],
+    },
+  ],
   'openclaw-dashscope-context-cache.patch': [
     {
       file: 'src/agents/embedded-agent-runner/prompt-cache-retention.ts',
