@@ -1,12 +1,6 @@
 import { authQuotaGateStateFromQuota, normalizeAuthQuota } from '../authQuota';
 import { updateServerModelMetadata } from './claudeSettings';
-
-export type ServerModelEntry = {
-  modelId: string;
-  supportsImage?: boolean;
-  supportsThinking?: boolean;
-  contextWindow?: number;
-};
+import { fetchServerModelCatalog } from './serverModelCatalog';
 
 export type StartupCacheWarmupDeps = {
   serverBaseUrl: string;
@@ -63,14 +57,15 @@ export async function runStartupCacheWarmup(deps: StartupCacheWarmupDeps): Promi
     (async () => {
       try {
         const url = appendKeyfromQuery(`${serverBaseUrl}/api/models/available`);
-        const resp = await fetchWithAuth(url, {
-          signal: AbortSignal.timeout(WARMUP_TIMEOUT),
+        const models = await fetchServerModelCatalog({
+          url,
+          fetchWithAuth,
+          requestOptions: {
+            signal: AbortSignal.timeout(WARMUP_TIMEOUT),
+          },
         });
-        if (!resp.ok) return;
-        const data = (await resp.json()) as { code: number; data: ServerModelEntry[] };
-        if (data.code !== 0 || !data.data) return;
-        updateServerModelMetadata(data.data);
-        console.log(`[Main] startup cache warmup: loaded ${data.data.length} server models`);
+        updateServerModelMetadata(models);
+        console.log(`[Main] startup cache warmup: loaded ${models.length} server models`);
       } catch (err) {
         console.debug('[Main] startup cache warmup: models fetch failed (non-fatal):', err);
       }
