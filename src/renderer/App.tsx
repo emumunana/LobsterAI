@@ -1106,7 +1106,11 @@ const App: React.FC = () => {
   return (
     <div className="h-screen overflow-hidden flex flex-col bg-surface-raised">
       {toastMessage && (
-        <Toast message={toastMessage} onClose={() => setToastMessage(null)} />
+        <Toast
+          message={toastMessage}
+          closeLabel={i18nService.t('close')}
+          onClose={() => setToastMessage(null)}
+        />
       )}
       {windowsStandaloneTitleBar}
       <div className="flex flex-1 min-h-0 overflow-hidden">
