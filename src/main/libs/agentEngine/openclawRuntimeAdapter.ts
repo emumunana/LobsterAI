@@ -421,18 +421,7 @@ type ChannelSessionLifecycleRun = {
 type OpenClawRuntimeAdapterOptions = {
   normalizeModelRef?: (modelRef: string) => string;
   onGatewayClientReady?: () => void;
-  beforeGatewayUse?: (context: string) => Promise<void>;
-  reconcileModelRuntimeOnAllowlistMiss?: (modelRef: string) => Promise<boolean>;
 };
-
-export function isOpenClawModelAllowlistMiss(error: unknown): boolean {
-  const message = error instanceof Error
-    ? error.message
-    : typeof error === 'string'
-      ? error
-      : JSON.stringify(error);
-  return /model not allowed/i.test(message);
-}
 
 const SessionModelPatchSource = {
   SessionOverride: 'sessionOverride',
@@ -4513,40 +4502,6 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     } catch (error) {
       this.recordGatewayRpcFailure('sessions.patch', error);
       console.warn('[OpenClawRuntime] failed to patch the session model before chat.send:', error);
-      if (
-        this.options.reconcileModelRuntimeOnAllowlistMiss
-        && isOpenClawModelAllowlistMiss(error)
-      ) {
-        console.warn(
-          '[OpenClawRuntime] detected a local model allowlist miss before chat.send; attempting one runtime reconciliation.',
-          `Session ${sessionId}.`,
-          `Model ${model}.`,
-        );
-        const recovered = await this.options.reconcileModelRuntimeOnAllowlistMiss(model)
-          .catch(reconciliationError => {
-            console.warn('[OpenClawRuntime] model allowlist reconciliation failed:', reconciliationError);
-            return false;
-          });
-        if (recovered) {
-          if (this.cancelTurnStartupIfStopped(sessionId, 'model allowlist reconciliation finished')) {
-            return;
-          }
-          await this.ensureGatewayClientReady();
-          await this.enqueueSessionModelPatch(sessionId, async () => {
-            await this.requestSessionPatchWithProfile({
-              sessionId,
-              sessionKey,
-              patch: { model },
-              source,
-              reason: 'single retry after model allowlist reconciliation',
-              timeoutMs: OpenClawRuntimeAdapter.SESSION_PATCH_SEND_TIMEOUT_MS,
-            });
-            this.markGatewayRpcSuccess();
-            this.rememberSessionModelPatch(sessionId, sessionKey, model, source);
-          });
-          return;
-        }
-      }
       const confirmedAfterFailure = this.getConfirmedSessionModelPatch(sessionId, sessionKey, model, source);
       if (confirmedAfterFailure && this.isGatewayRequestTimeout(error, 'sessions.patch')) {
         console.warn(`[OpenClawRuntime] continuing chat.send for session ${sessionId} after a redundant session model patch timed out.`);
@@ -5130,7 +5085,6 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   }
 
   private async _ensureGatewayClientReadyImpl(): Promise<void> {
-    await this.options.beforeGatewayUse?.('OpenClaw gateway client initialization');
     console.log('[ChannelSync] ensureGatewayClientReady: starting engine gateway...');
     const engineStatus = await this.engineManager.startGateway('channel-sync-ensure-ready');
     console.log('[ChannelSync] ensureGatewayClientReady: engine phase=', engineStatus.phase, 'message=', engineStatus.message);

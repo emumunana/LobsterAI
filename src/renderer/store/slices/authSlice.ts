@@ -1,8 +1,4 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
-import {
-  type AuthRuntimeState,
-  createInitialAuthRuntimeState,
-} from '@shared/auth/constants';
 
 export interface UserProfile {
   yid: string;
@@ -66,7 +62,6 @@ interface AuthState {
   user: UserProfile | null;
   quota: UserQuota | null;
   profileSummary: ProfileSummary | null;
-  runtimeState: AuthRuntimeState;
 }
 
 const initialState: AuthState = {
@@ -75,7 +70,6 @@ const initialState: AuthState = {
   user: null,
   quota: null,
   profileSummary: null,
-  runtimeState: createInitialAuthRuntimeState(),
 };
 
 const authSlice = createSlice({
@@ -97,7 +91,6 @@ const authSlice = createSlice({
       state.user = null;
       state.quota = null;
       state.profileSummary = null;
-      state.runtimeState = createInitialAuthRuntimeState();
     },
     updateQuota(state, action: PayloadAction<UserQuota>) {
       state.quota = action.payload;
@@ -105,18 +98,8 @@ const authSlice = createSlice({
     setProfileSummary(state, action: PayloadAction<ProfileSummary>) {
       state.profileSummary = action.payload;
     },
-    setAuthRuntimeState(state, action: PayloadAction<AuthRuntimeState>) {
-      state.runtimeState = action.payload;
-    },
   },
 });
 
-export const {
-  setAuthLoading,
-  setAuthRuntimeState,
-  setLoggedIn,
-  setLoggedOut,
-  setProfileSummary,
-  updateQuota,
-} = authSlice.actions;
+export const { setAuthLoading, setLoggedIn, setLoggedOut, updateQuota, setProfileSummary } = authSlice.actions;
 export default authSlice.reducer;

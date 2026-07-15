@@ -4,7 +4,6 @@ import type {
   AsrRealtimeSessionRequest,
   AsrRealtimeSessionResult,
 } from '../../shared/asr/constants';
-import type { AuthRuntimeState } from '../../shared/auth/constants';
 import type {
   BrowserDiagnosticResult,
   BrowserRuntimeProfile,
@@ -1590,13 +1589,7 @@ interface IElectronAPI {
     login: (loginUrl?: string) => Promise<{ success: boolean; error?: string }>;
     exchange: (
       code: string,
-    ) => Promise<{
-      success: boolean;
-      user?: any;
-      quota?: any;
-      runtimeGeneration?: number;
-      error?: string;
-    }>;
+    ) => Promise<{ success: boolean; user?: any; quota?: any; error?: string }>;
     getUser: () => Promise<{ success: boolean; user?: any; quota?: any }>;
     getQuota: () => Promise<{ success: boolean; quota?: any }>;
     logout: () => Promise<{ success: boolean }>;
@@ -1618,13 +1611,6 @@ interface IElectronAPI {
         accessible?: boolean;
         restrictionHint?: string;
       }>;
-      error?: string;
-    }>;
-    getRuntimeState: () => Promise<AuthRuntimeState | null>;
-    retryRuntimeReconciliation: () => Promise<{
-      success: boolean;
-      generation?: number;
-      error?: string;
     }>;
     getPricingCatalog: () => Promise<{
       success: boolean;
@@ -1647,7 +1633,6 @@ interface IElectronAPI {
     getPendingCallback: () => Promise<string | null>;
     onCallback: (callback: (data: { code: string }) => void) => () => void;
     onQuotaChanged: (callback: () => void) => () => void;
-    onRuntimeStateChanged: (callback: (state: AuthRuntimeState) => void) => () => void;
   };
   media: {
     getModels: (type: 'image' | 'video') => Promise<{ success: boolean; models?: Array<{ modelId: string; displayName: string; provider: string; mediaType: string; generationTimeout: number; pricing: Record<string, unknown> }>; error?: string }>;

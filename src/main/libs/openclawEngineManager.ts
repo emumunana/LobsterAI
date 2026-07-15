@@ -730,11 +730,6 @@ export class OpenClawEngineManager extends EventEmitter {
   async restartGateway(reason = 'unknown'): Promise<OpenClawEngineStatus> {
     const pid = this.gatewayProcess && 'pid' in this.gatewayProcess ? this.gatewayProcess.pid : 'none';
     console.log(`${gwDiagTs()} restartGateway: reason=${reason}, pid=${pid}, port=${this.gatewayPort ?? 'none'}`);
-    const pendingStart = this.startGatewayPromise;
-    if (pendingStart) {
-      console.log(`${gwDiagTs()} restartGateway: waiting for in-flight gateway startup before restart`);
-      await pendingStart.catch(() => this.getStatus());
-    }
     console.log(`${gwDiagTs()} restartGateway: stopping existing gateway...`);
     await this.stopGateway();
     // Reset restart counter on manual restart so user can always retry

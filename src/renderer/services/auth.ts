@@ -1,10 +1,8 @@
-import type { AuthRuntimeState } from '@shared/auth/constants';
 import { ProviderName } from '@shared/providers';
 
 import { store } from '../store';
 import {
   setAuthLoading,
-  setAuthRuntimeState,
   setLoggedIn,
   setLoggedOut,
   setProfileSummary,
@@ -93,7 +91,6 @@ export function mapPricingCatalogToPublicServerModels(
 class AuthService {
   private unsubCallback: (() => void) | null = null;
   private unsubQuotaChanged: (() => void) | null = null;
-  private unsubRuntimeState: (() => void) | null = null;
   private unsubWindowState: (() => void) | null = null;
   private lastRefreshTime = 0;
 
@@ -110,13 +107,6 @@ class AuthService {
     this.unsubCallback = window.electron.auth.onCallback(async ({ code }) => {
       await this.handleCallback(code);
     });
-    this.unsubRuntimeState = window.electron.auth.onRuntimeStateChanged((state: AuthRuntimeState) => {
-      store.dispatch(setAuthRuntimeState(state));
-    });
-    const runtimeState = await window.electron.auth.getRuntimeState().catch(() => null);
-    if (runtimeState) {
-      store.dispatch(setAuthRuntimeState(runtimeState));
-    }
 
     try {
       const pendingCode = await window.electron.auth.getPendingCallback();
@@ -198,7 +188,6 @@ class AuthService {
       const result = await window.electron.auth.exchange(code);
       if (result.success) {
         store.dispatch(setLoggedIn({ user: result.user, quota: result.quota }));
-        store.dispatch(clearServerModels());
         await this.loadServerModels();
         void this.fetchProfileSummary();
         this.refreshQuota();
@@ -252,18 +241,6 @@ class AuthService {
     await this.loadPublicPricingCatalogModels();
   }
 
-  async retryRuntimeReconciliation(): Promise<boolean> {
-    try {
-      const result = await window.electron.auth.retryRuntimeReconciliation();
-      if (result.success) {
-        await this.loadServerModels();
-      }
-      return result.success;
-    } catch {
-      return false;
-    }
-  }
-
   /**
    * Refresh quota information.
    */
@@ -308,8 +285,6 @@ class AuthService {
     this.unsubCallback = null;
     this.unsubQuotaChanged?.();
     this.unsubQuotaChanged = null;
-    this.unsubRuntimeState?.();
-    this.unsubRuntimeState = null;
     this.unsubWindowState?.();
     this.unsubWindowState = null;
   }

@@ -1843,8 +1843,6 @@ function createRunTurnAdapter(options: {
   agentModel?: string;
   cachedModel?: string;
   modelPatchError?: Error;
-  modelPatchErrors?: Array<Error | undefined>;
-  reconcileModelRuntimeOnAllowlistMiss?: (modelRef: string) => Promise<boolean>;
   holdFirstModelPatch?: boolean;
   sessionCwd?: string;
   chatSendError?: Error;
@@ -1923,9 +1921,7 @@ function createRunTurnAdapter(options: {
       clientEntryPath: '/tmp/openclaw-gateway-client.js',
     }),
   };
-  const adapter = new OpenClawRuntimeAdapter(store as never, engineManager as never, {
-    reconcileModelRuntimeOnAllowlistMiss: options.reconcileModelRuntimeOnAllowlistMiss,
-  });
+  const adapter = new OpenClawRuntimeAdapter(store as never, engineManager as never);
   adapter.gatewayClient = {
     start: () => {},
     stop: () => {},
@@ -1938,11 +1934,8 @@ function createRunTurnAdapter(options: {
           firstModelPatchStartedResolve?.();
           await firstModelPatchBlocked;
         }
-        const modelPatchError = options.modelPatchErrors
-          ? options.modelPatchErrors[modelPatchCount - 1]
-          : options.modelPatchError;
-        if (modelPatchError) {
-          throw modelPatchError;
+        if (options.modelPatchError) {
+          throw options.modelPatchError;
         }
         return {};
       }
@@ -2098,51 +2091,6 @@ test('continueSession rejects an unconfirmed session override patch timeout befo
     .rejects.toThrow('gateway request timeout for sessions.patch');
 
   expect(requests.map((request) => request.method)).toEqual(['sessions.patch']);
-});
-
-test('continueSession reconciles one local model allowlist miss before chat.send', async () => {
-  const model = 'lobsterai-server/qwen3.6-plus-YoudaoInner';
-  const reconcileModelRuntimeOnAllowlistMiss = vi.fn(async () => true);
-  const { adapter, requests } = createRunTurnAdapter({
-    sessionModelOverride: model,
-    modelPatchErrors: [new Error(`model not allowed: ${model}`)],
-    reconcileModelRuntimeOnAllowlistMiss,
-  });
-
-  await adapter.continueSession('session-1', 'hello');
-
-  expect(reconcileModelRuntimeOnAllowlistMiss).toHaveBeenCalledTimes(1);
-  expect(reconcileModelRuntimeOnAllowlistMiss).toHaveBeenCalledWith(model);
-  expect(requests.map((request) => request.method).slice(0, 4)).toEqual([
-    'sessions.patch',
-    'sessions.patch',
-    'chat.history',
-    'chat.send',
-  ]);
-  expect(requests.filter((request) => request.method === 'chat.send')).toHaveLength(1);
-});
-
-test('continueSession does not repeat allowlist recovery after the retry fails', async () => {
-  const model = 'lobsterai-server/qwen3.6-plus-YoudaoInner';
-  const reconcileModelRuntimeOnAllowlistMiss = vi.fn(async () => true);
-  const { adapter, requests } = createRunTurnAdapter({
-    sessionModelOverride: model,
-    modelPatchErrors: [
-      new Error(`model not allowed: ${model}`),
-      new Error(`model not allowed: ${model}`),
-    ],
-    reconcileModelRuntimeOnAllowlistMiss,
-  });
-  adapter.on('error', () => undefined);
-
-  await expect(adapter.continueSession('session-1', 'hello'))
-    .rejects.toThrow('model not allowed');
-
-  expect(reconcileModelRuntimeOnAllowlistMiss).toHaveBeenCalledTimes(1);
-  expect(requests.map((request) => request.method)).toEqual([
-    'sessions.patch',
-    'sessions.patch',
-  ]);
 });
 
 test('continueSession waits for an in-flight model patch before chat.send', async () => {

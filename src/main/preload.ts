@@ -10,7 +10,7 @@ import {
   AsrIpcChannel,
   type AsrRealtimeSessionRequest,
 } from '../shared/asr/constants';
-import { AuthIpcChannel, type AuthRuntimeState } from '../shared/auth/constants';
+import { AuthIpcChannel } from '../shared/auth/constants';
 import { BrowserIpc, type BrowserRuntimeProfile } from '../shared/browserWebAccess/constants';
 import { ClipboardIpc } from '../shared/clipboard/constants';
 import { CoworkIpcChannel } from '../shared/cowork/constants';
@@ -1023,16 +1023,14 @@ contextBridge.exposeInMainWorld('electron', {
     send: (status: 'online' | 'offline') => ipcRenderer.send('network:status-change', status),
   },
   auth: {
-    login: (loginUrl?: string) => ipcRenderer.invoke(AuthIpcChannel.Login, { loginUrl }),
-    exchange: (code: string) => ipcRenderer.invoke(AuthIpcChannel.Exchange, { code }),
-    getUser: () => ipcRenderer.invoke(AuthIpcChannel.GetUser),
-    getQuota: () => ipcRenderer.invoke(AuthIpcChannel.GetQuota),
-    logout: () => ipcRenderer.invoke(AuthIpcChannel.Logout),
-    refreshToken: () => ipcRenderer.invoke(AuthIpcChannel.RefreshToken),
-    getAccessToken: () => ipcRenderer.invoke(AuthIpcChannel.GetAccessToken),
-    getModels: () => ipcRenderer.invoke(AuthIpcChannel.GetModels),
-    getRuntimeState: () => ipcRenderer.invoke(AuthIpcChannel.GetRuntimeState),
-    retryRuntimeReconciliation: () => ipcRenderer.invoke(AuthIpcChannel.RetryRuntimeReconciliation),
+    login: (loginUrl?: string) => ipcRenderer.invoke('auth:login', { loginUrl }),
+    exchange: (code: string) => ipcRenderer.invoke('auth:exchange', { code }),
+    getUser: () => ipcRenderer.invoke('auth:getUser'),
+    getQuota: () => ipcRenderer.invoke('auth:getQuota'),
+    logout: () => ipcRenderer.invoke('auth:logout'),
+    refreshToken: () => ipcRenderer.invoke('auth:refreshToken'),
+    getAccessToken: () => ipcRenderer.invoke('auth:getAccessToken'),
+    getModels: () => ipcRenderer.invoke('auth:getModels'),
     getPricingCatalog: () => ipcRenderer.invoke(AuthIpcChannel.GetPricingCatalog),
     getProfileSummary: () => ipcRenderer.invoke('auth:getProfileSummary'),
     getActiveClientBanner: () => ipcRenderer.invoke('auth:getActiveClientBanner'),
@@ -1045,13 +1043,8 @@ contextBridge.exposeInMainWorld('electron', {
     },
     onQuotaChanged: (callback: () => void) => {
       const handler = () => callback();
-      ipcRenderer.on(AuthIpcChannel.QuotaChanged, handler);
-      return () => ipcRenderer.removeListener(AuthIpcChannel.QuotaChanged, handler);
-    },
-    onRuntimeStateChanged: (callback: (state: AuthRuntimeState) => void) => {
-      const handler = (_event: unknown, state: AuthRuntimeState) => callback(state);
-      ipcRenderer.on(AuthIpcChannel.RuntimeStateChanged, handler);
-      return () => ipcRenderer.removeListener(AuthIpcChannel.RuntimeStateChanged, handler);
+      ipcRenderer.on('auth:quotaChanged', handler);
+      return () => ipcRenderer.removeListener('auth:quotaChanged', handler);
     },
   },
   media: {

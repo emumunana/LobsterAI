@@ -37,13 +37,7 @@ import { AppIpcChannel } from '../shared/app/constants';
 import { AppSettingsAutoLaunchErrorCode, AppSettingsIpc } from '../shared/appSettings/constants';
 import { AppUpdateIpc } from '../shared/appUpdate/constants';
 import { ArtifactBrowserPartition, ArtifactPreviewIpc, ArtifactPreviewProtocol } from '../shared/artifactPreview/constants';
-import {
-  AuthIpcChannel,
-  AuthRuntimeErrorCode,
-  AuthRuntimePhase,
-  type AuthRuntimeState,
-  AuthRuntimeTrigger,
-} from '../shared/auth/constants';
+import { AuthIpcChannel } from '../shared/auth/constants';
 import {
   type BrowserDiagnosticResultStep,
   BrowserDiagnosticStatus,
@@ -187,10 +181,6 @@ import {
   startAuthLocalCallback,
 } from './libs/authLocalCallbackServer';
 import {
-  AuthRuntimeReconciliation,
-  type AuthRuntimeReconciliationResult,
-} from './libs/authRuntimeReconciliation';
-import {
   clearServerModelMetadata,
   getAllServerModelMetadata,
   getCurrentApiConfig,
@@ -316,10 +306,6 @@ import { startOpenClawTokenProxy, stopOpenClawTokenProxy } from './libs/openclaw
 import { migrateMainAgentWorkspace } from './libs/openclawWorkspaceMigration';
 import { ensurePythonRuntimeReady } from './libs/pythonRuntime';
 import { sanitizeUrlForLog, serializeForLog } from './libs/sanitizeForLog';
-import {
-  fetchServerModelCatalog,
-  type ServerModelCatalogEntry,
-} from './libs/serverModelCatalog';
 import { packageNodeServiceDeployment } from './libs/shareDeployment/nodeServiceDeploymentPackager';
 import {
   analyzeNodeServiceProjectDirectory,
@@ -1733,43 +1719,8 @@ const bootstrapOpenClawEngine = async (
 // Module-level handle so ensureOpenClawRunningForCowork can await any in-flight
 // proactive token refresh before syncing config to the gateway.
 let pendingTokenRefresh: Promise<string | null> | null = null;
-let authRuntimeReconciliation: AuthRuntimeReconciliation | null = null;
-
-const buildAuthRuntimeStatus = (state: AuthRuntimeState): OpenClawEngineStatus => {
-  const current = getOpenClawEngineManager().getStatus();
-  const failed = state.phase === AuthRuntimePhase.Failed;
-  return {
-    phase: failed ? 'error' : 'starting',
-    version: current.version,
-    message: failed
-      ? state.error || 'Failed to initialize the authenticated model runtime.'
-      : 'Initializing authenticated models. Please try again shortly.',
-    canRetry: failed && state.canRetry,
-  };
-};
-
-const waitForAuthRuntimeReconciliation = async (
-  context: string,
-): Promise<OpenClawEngineStatus | null> => {
-  let pending = authRuntimeReconciliation?.getActivePromise() ?? null;
-  while (pending) {
-    console.log(`[AuthRuntime] waiting for reconciliation before ${context}.`);
-    await pending.catch((): void => undefined);
-    pending = authRuntimeReconciliation?.getActivePromise() ?? null;
-  }
-
-  const state = authRuntimeReconciliation?.getState();
-  if (!state || state.phase === AuthRuntimePhase.Idle || state.phase === AuthRuntimePhase.Ready) {
-    return null;
-  }
-  return buildAuthRuntimeStatus(state);
-};
 
 const ensureOpenClawRunningForCowork = async () => {
-  const authRuntimeStatus = await waitForAuthRuntimeReconciliation('cowork engine startup');
-  if (authRuntimeStatus) {
-    return authRuntimeStatus;
-  }
   const configApplyStatus = await waitForOpenClawConfigApply('cowork engine startup');
   if (configApplyStatus) {
     return configApplyStatus;
@@ -2053,8 +2004,6 @@ let openClawConfigApplyQueue: Promise<void> = Promise.resolve();
 let openClawConfigApplyState: GatewayConfigApplyState | null = null;
 let openClawConfigApplyGeneration = 0;
 let deferredRestartReason: string | null = null;
-let deferredRestartCompletionPromise: Promise<SyncOpenClawConfigResult> | null = null;
-let resolveDeferredRestartCompletion: ((result: SyncOpenClawConfigResult) => void) | null = null;
 
 const buildConfigApplyPendingStatus = (message: string): OpenClawEngineStatus => {
   const current = getOpenClawEngineManager().getStatus();
@@ -2100,16 +2049,11 @@ const executeDeferredGatewayRestart = async (reason: string) => {
   console.log(
     `${gwDiagTs()} executeDeferredGatewayRestart: performing deferred restart (reason: ${reason})`,
   );
-  const result = await syncOpenClawConfig({
+  await syncOpenClawConfig({
     reason: `deferred:${reason}`,
     restartGatewayIfRunning: true,
     expectedImpact: OpenClawConfigImpact.Restart,
   });
-  if (!deferredRestartReason) {
-    resolveDeferredRestartCompletion?.(result);
-    resolveDeferredRestartCompletion = null;
-    deferredRestartCompletionPromise = null;
-  }
 };
 
 const scheduleDeferredGatewayRestart = (reason: string) => {
@@ -2125,11 +2069,6 @@ const scheduleDeferredGatewayRestart = (reason: string) => {
   console.log(
     `${gwDiagTs()} scheduleDeferredGatewayRestart: scheduling deferred restart, polling every ${DEFERRED_RESTART_POLL_MS}ms, max wait ${DEFERRED_RESTART_MAX_WAIT_MS}ms (reason: ${reason})`,
   );
-  if (!deferredRestartCompletionPromise) {
-    deferredRestartCompletionPromise = new Promise(resolve => {
-      resolveDeferredRestartCompletion = resolve;
-    });
-  }
   deferredRestartReason = reason;
   deferredRestartTimer = setInterval(() => {
     if (!hasActiveGatewayWorkloads()) {
@@ -2262,7 +2201,7 @@ const _syncOpenClawConfigImpl = async (
 
   const manager = getOpenClawEngineManager();
   const status = manager.getStatus();
-  if (status.phase !== 'running' && status.phase !== 'starting') {
+  if (status.phase !== 'running') {
     console.log(
       `${D()} ──── RESTART NEEDED but gateway not running (phase=${status.phase}), skipping. reason=${options.reason}`,
     );
@@ -2290,7 +2229,8 @@ const _syncOpenClawConfigImpl = async (
     openClawRuntimeAdapter.disconnectGatewayClient();
   }
 
-  const restarted = await manager.restartGateway(`config-sync:${options.reason}`);
+  await manager.stopGateway();
+  const restarted = await manager.startGateway(`config-sync:${options.reason}`);
   if (restarted.phase !== 'running') {
     return {
       success: false,
@@ -2628,7 +2568,7 @@ const bindCoworkRuntimeForwarder = (): void => {
         const windows = BrowserWindow.getAllWindows();
         windows.forEach(win => {
           if (win.isDestroyed()) return;
-          win.webContents.send(AuthIpcChannel.QuotaChanged);
+          win.webContents.send('auth:quotaChanged');
         });
       }
     } catch {
@@ -2664,24 +2604,6 @@ const getCoworkEngineRouter = () => {
         {
           normalizeModelRef: normalizeOpenClawModelRef,
           onGatewayClientReady: () => getCronJobService().notifyGatewayReady(),
-          beforeGatewayUse: async context => {
-            const status = await waitForAuthRuntimeReconciliation(context);
-            if (status) {
-              throw new Error(status.message || 'Authenticated model runtime is not ready.');
-            }
-          },
-          reconcileModelRuntimeOnAllowlistMiss: async modelRef => {
-            if (
-              !getStore().get<{ accessToken: string; refreshToken: string }>('auth_tokens')
-              || !authRuntimeReconciliation
-              || !isLobsteraiServerModelRef(modelRef)
-            ) {
-              return false;
-            }
-            const active = authRuntimeReconciliation.start(AuthRuntimeTrigger.AllowlistRecovery);
-            const result = await active.promise;
-            return result.success;
-          },
         },
         new SubagentRunStore(getStore().getDatabase()),
         new SubagentMessageStore(getStore().getDatabase()),
@@ -4151,77 +4073,6 @@ if (!gotTheLock) {
     return resp;
   };
 
-  let latestServerModelCatalog: ServerModelCatalogEntry[] = [];
-  const AUTH_RUNTIME_MODEL_FETCH_TIMEOUT_MS = 5_000;
-  const fetchAvailableServerModels = async (): Promise<ServerModelCatalogEntry[]> => {
-    const url = appendKeyfromQuery(`${getServerApiBaseUrl()}/api/models/available`);
-    console.log(`[AuthRuntime] requesting available models at ${url}`);
-    const models = await fetchServerModelCatalog({
-      url,
-      fetchWithAuth,
-      requestOptions: {
-        signal: AbortSignal.timeout(AUTH_RUNTIME_MODEL_FETCH_TIMEOUT_MS),
-      },
-    });
-    console.log(`[AuthRuntime] loaded ${models.length} available server model(s).`);
-    return models;
-  };
-
-  authRuntimeReconciliation = new AuthRuntimeReconciliation({
-    fetchModels: fetchAvailableServerModels,
-    getCachedModels: getAllServerModelMetadata,
-    updateCachedModels: models => {
-      latestServerModelCatalog = models;
-      updateServerModelMetadata(models);
-    },
-    applyRuntimeConfig: async ({ generation, runtimeCatalogChanged }) => {
-      console.log(
-        `[AuthRuntime] applying generation ${generation}; runtimeCatalogChanged=${runtimeCatalogChanged}`,
-      );
-      const result = await syncOpenClawConfig({
-        reason: `auth-runtime-reconciliation:${generation}`,
-        restartGatewayIfRunning: true,
-        expectedImpact: runtimeCatalogChanged
-          ? OpenClawConfigImpact.Restart
-          : OpenClawConfigImpact.None,
-      });
-      const finalResult = result.success && deferredRestartCompletionPromise
-        ? await deferredRestartCompletionPromise
-        : result;
-      if (!finalResult.success) {
-        return {
-          success: false,
-          error: finalResult.error,
-          errorCode: finalResult.status?.phase === 'error'
-            ? AuthRuntimeErrorCode.GatewayRestartFailed
-            : AuthRuntimeErrorCode.ConfigApplyFailed,
-        };
-      }
-      return { success: true };
-    },
-    onStateChange: state => {
-      console.log(
-        `[AuthRuntime] generation=${state.generation} phase=${state.phase} models=${state.modelCount}`,
-      );
-      for (const win of BrowserWindow.getAllWindows()) {
-        if (!win.isDestroyed()) {
-          win.webContents.send(AuthIpcChannel.RuntimeStateChanged, state);
-        }
-      }
-    },
-  });
-
-  const awaitActiveAuthRuntimeReconciliation = async (
-  ): Promise<AuthRuntimeReconciliationResult | null> => {
-    let latestResult: AuthRuntimeReconciliationResult | null = null;
-    let pending = authRuntimeReconciliation?.getActivePromise() ?? null;
-    while (pending) {
-      latestResult = await pending;
-      pending = authRuntimeReconciliation?.getActivePromise() ?? null;
-    }
-    return latestResult;
-  };
-
   const extractSessionIdFromKey = (sessionKey: string): string | null =>
     resolveCoworkSessionIdByOpenClawSessionKey(getStore().getDatabase(), sessionKey);
 
@@ -4969,7 +4820,7 @@ if (!gotTheLock) {
             emitMediaTaskMessage(tracker.sessionId, lines.join('\n'));
           }
           BrowserWindow.getAllWindows().forEach(win => {
-            if (!win.isDestroyed()) win.webContents.send(AuthIpcChannel.QuotaChanged);
+            if (!win.isDestroyed()) win.webContents.send('auth:quotaChanged');
           });
         }
       } catch {
@@ -5153,7 +5004,7 @@ if (!gotTheLock) {
     return quota;
   };
 
-  ipcMain.handle(AuthIpcChannel.Login, async (_event, { loginUrl }: { loginUrl?: string } = {}) => {
+  ipcMain.handle('auth:login', async (_event, { loginUrl }: { loginUrl?: string } = {}) => {
     const baseUrl = loginUrl || `${getServerApiBaseUrl()}/login`;
     const fallbackUrl = appendLoginParams(baseUrl, { source: 'electron' });
     let localCallback: Awaited<ReturnType<typeof startAuthLocalCallback>> | null = null;
@@ -5194,7 +5045,7 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle(AuthIpcChannel.Exchange, async (_event, { code }: { code: string }) => {
+  ipcMain.handle('auth:exchange', async (_event, { code }: { code: string }) => {
     try {
       const serverBaseUrl = getServerApiBaseUrl();
       const exchangeUrl = `${serverBaseUrl}/api/auth/exchange`;
@@ -5223,21 +5074,10 @@ if (!gotTheLock) {
       saveAuthTokens(body.data.accessToken, body.data.refreshToken);
       saveAuthUser(body.data.user);
       console.log('[Auth] exchange user data:', JSON.stringify(body.data.user));
+      const previousQuotaGateState = getAuthQuotaGateState();
       const quota = normalizeQuota(body.data.quota);
-      const runtime = authRuntimeReconciliation?.start(AuthRuntimeTrigger.Login);
-      runtime?.promise.then(result => {
-        if (!result.success && !result.stale) {
-          console.warn('[AuthRuntime] login reconciliation failed:', result.error);
-        }
-      }).catch(error => {
-        console.error('[AuthRuntime] unexpected login reconciliation error:', error);
-      });
-      return {
-        success: true,
-        user: body.data.user,
-        quota,
-        runtimeGeneration: runtime?.generation,
-      };
+      syncOpenClawConfigIfAuthQuotaGateChanged(previousQuotaGateState);
+      return { success: true, user: body.data.user, quota };
     } catch (error) {
       console.error('[Auth] exchange failed:', error);
       return {
@@ -5247,7 +5087,7 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle(AuthIpcChannel.GetUser, async () => {
+  ipcMain.handle('auth:getUser', async () => {
     try {
       const tokens = getAuthTokens();
       if (!tokens) return { success: false };
@@ -5282,7 +5122,7 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle(AuthIpcChannel.GetQuota, async () => {
+  ipcMain.handle('auth:getQuota', async () => {
     try {
       const tokens = getAuthTokens();
       if (!tokens) return { success: false };
@@ -5345,7 +5185,7 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle(AuthIpcChannel.Logout, async () => {
+  ipcMain.handle('auth:logout', async () => {
     try {
       const tokens = getAuthTokens();
       if (tokens) {
@@ -5367,8 +5207,6 @@ if (!gotTheLock) {
       }
       clearAuthTokens();
       clearAuthUser();
-      authRuntimeReconciliation?.cancel();
-      latestServerModelCatalog = [];
       clearServerModelMetadata();
       const previousQuotaGateState = getAuthQuotaGateState();
       resetAuthQuotaGateState();
@@ -5388,8 +5226,6 @@ if (!gotTheLock) {
       const previousQuotaGateState = getAuthQuotaGateState();
       clearAuthTokens();
       clearAuthUser();
-      authRuntimeReconciliation?.cancel();
-      latestServerModelCatalog = [];
       clearServerModelMetadata();
       resetAuthQuotaGateState();
       const quotaGateSyncScheduled = syncOpenClawConfigIfAuthQuotaGateChanged(previousQuotaGateState);
@@ -5405,7 +5241,7 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle(AuthIpcChannel.RefreshToken, async () => {
+  ipcMain.handle('auth:refreshToken', async () => {
     try {
       const accessToken = await refreshOnce('manual');
       return accessToken ? { success: true, accessToken } : { success: false };
@@ -5414,7 +5250,7 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle(AuthIpcChannel.GetAccessToken, async () => {
+  ipcMain.handle('auth:getAccessToken', async () => {
     const tokens = getAuthTokens();
     return tokens?.accessToken || null;
   });
@@ -5460,78 +5296,63 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle(AuthIpcChannel.GetRuntimeState, () => (
-    authRuntimeReconciliation?.getState() ?? null
-  ));
-
-  ipcMain.handle(AuthIpcChannel.RetryRuntimeReconciliation, async () => {
-    if (!getAuthTokens() || !authRuntimeReconciliation) {
-      return { success: false, error: 'Authentication is required.' };
-    }
-    if (authRuntimeReconciliation.getActivePromise()) {
-      return {
-        success: true,
-        generation: authRuntimeReconciliation.getState().generation,
-      };
-    }
-    const runtime = authRuntimeReconciliation.start(AuthRuntimeTrigger.Retry);
-    runtime.promise.catch(error => {
-      console.error('[AuthRuntime] unexpected retry reconciliation error:', error);
-    });
-    return { success: true, generation: runtime.generation };
-  });
-
-  ipcMain.handle(AuthIpcChannel.GetModels, async () => {
+  ipcMain.handle('auth:getModels', async () => {
     try {
       const tokens = getAuthTokens();
       if (!tokens) {
         console.log('[Auth:getModels] No auth tokens available');
         return { success: false };
       }
-      const activeResult = await awaitActiveAuthRuntimeReconciliation();
-      if (activeResult) {
-        if (!activeResult.success) {
-          return { success: false, error: activeResult.error };
-        }
-        return { success: true, models: activeResult.models };
+      const serverBaseUrl = getServerApiBaseUrl();
+      const url = appendKeyfromQuery(`${serverBaseUrl}/api/models/available`);
+      console.log(`[Auth:getModels] requesting available models at ${url}`);
+      const resp = await fetchWithAuth(url);
+      console.log('[Auth:getModels] Response status:', resp.status);
+      if (!resp.ok) {
+        console.log('[Auth:getModels] Response not ok:', resp.status, resp.statusText);
+        return { success: false };
       }
-
-      const runtimeState = authRuntimeReconciliation?.getState();
-      if (
-        runtimeState?.phase === AuthRuntimePhase.Ready
-        && runtimeState.completedAt
-        && Date.now() - runtimeState.completedAt < 10_000
-        && latestServerModelCatalog.length > 0
-      ) {
-        return { success: true, models: latestServerModelCatalog };
-      }
-
-      const models = await fetchAvailableServerModels();
-      const serverModelsChanged = updateServerModelMetadata(models);
-      latestServerModelCatalog = models;
-      const serverModelIds = models.map(model => model.modelId);
+      const data = (await resp.json()) as {
+        code: number;
+        data: Array<{
+          modelId: string;
+          modelName: string;
+          provider: string;
+          apiFormat: string;
+          supportsImage?: boolean;
+          supportsThinking?: boolean;
+          explicitContextCache?: boolean;
+          contextWindow?: number;
+          costMultiplier?: number;
+          description?: string;
+        }>;
+      };
+      console.log('[Auth:getModels] Response data:', JSON.stringify(data).slice(0, 500));
+      if (data.code !== 0) return { success: false };
+      // Cache server model metadata for use in OpenClaw config sync (supportsImage, etc.)
+      const serverModelsChanged = updateServerModelMetadata(data.data);
+      const serverModelIds = data.data.map(model => model.modelId);
       const serverModelsMissingFromConfig = !openClawConfigHasServerModels(serverModelIds);
+      // Re-sync so the gateway picks up the correct supportsImage values for server models.
+      // This IPC can run after normal chat completion when the renderer refreshes quota/model
+      // state, so server model updates must not force a hard gateway restart.
       if (serverModelsChanged || serverModelsMissingFromConfig) {
         console.log(
-          `[Auth:getModels] applying OpenClaw config for ${serverModelIds.length} server model(s); metadataChanged=${serverModelsChanged} missingFromConfig=${serverModelsMissingFromConfig}`,
+          `[Auth:getModels] scheduling OpenClaw config sync for ${serverModelIds.length} server model(s); metadataChanged=${serverModelsChanged} missingFromConfig=${serverModelsMissingFromConfig}`,
         );
-        const syncResult = await syncOpenClawConfig({
+        syncOpenClawConfig({
           reason: serverModelsChanged ? 'server-models-updated' : 'server-models-restored',
-          restartGatewayIfRunning: true,
+          restartGatewayIfRunning: false,
+        }).catch((error) => {
+          console.warn('[Auth:getModels] failed to sync OpenClaw config after loading server models:', error);
         });
-        if (!syncResult.success) {
-          return { success: false, error: syncResult.error };
-        }
       } else {
         console.debug('[Auth:getModels] server model metadata unchanged, skipping config sync');
       }
-      return { success: true, models };
+      return { success: true, models: data.data };
     } catch (e) {
       console.error('[Auth:getModels] Error:', e);
-      return {
-        success: false,
-        error: e instanceof Error ? e.message : 'Failed to load server models.',
-      };
+      return { success: false };
     }
   });
 
